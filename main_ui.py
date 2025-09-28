@@ -207,6 +207,9 @@ class VBumpUI(QMainWindow):
                 self.current_vbumps.extend(new_vbumps)
                 self.log(f"📐 Created {len(new_vbumps)} bumps by pitch")
                 dlg.accept()
+                # 新增: 若 substrate_p0 和 substrate_p1 已設，則繪圖
+                if self.substrate_p0 and self.substrate_p1:
+                    self.plot_aabb()
             except Exception:
                 QMessageBox.warning(self, "Warning", "Invalid input values.")
         btn_ok.clicked.connect(on_ok)
@@ -258,6 +261,9 @@ class VBumpUI(QMainWindow):
                 self.current_vbumps.extend(new_vbumps)
                 self.log(f"📏 Created {len(new_vbumps)} bumps by count")
                 dlg.accept()
+                # 新增: 若 substrate_p0 和 substrate_p1 已設，則繪圖
+                if self.substrate_p0 and self.substrate_p1:
+                    self.plot_aabb()
             except Exception:
                 QMessageBox.warning(self, "Warning", "Invalid input values.")
         btn_ok.clicked.connect(on_ok)
@@ -435,7 +441,10 @@ class VBumpUI(QMainWindow):
 
 
 if __name__ == "__main__":
-    app = QApplication([])
+    import sys
+    app = QApplication(sys.argv)
     ui = VBumpUI()
     ui.show()
-    app.exec()
+    exit_code = app.exec()
+    del ui
+    sys.exit(exit_code)
