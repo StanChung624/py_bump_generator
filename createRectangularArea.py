@@ -20,8 +20,8 @@ def create_rectangular_area_XY_by_pitch(
         while y < ymax:
             ret.append(VBump()._from_setting(x,y,z,x,y,z+height,diameter,group))
             y += y_pitch
-        x+= x_pitch
-        y = ymin
+        x+=x_pitch
+        y=ymin
 
     print(f"✅ {len(ret)}  vbumps has been created.")
     return ret

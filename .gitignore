@@ -1,3 +1,30 @@
-/.DS_Store
-/.venv
-/README_main_cli_en.md
+# macOS
+.DS_Store
+
+# Virtual environment directories
+.venv/
+venv/
+env/
+
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+*.spec
+*.pyc
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE settings
+.vscode/
+.idea/
+
+# Generated assets
+*.log
+*.wdl

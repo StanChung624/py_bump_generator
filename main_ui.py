@@ -436,7 +436,7 @@ class VBumpUI(QMainWindow):
 
     def plot_aabb(self):
 
-        if len(self.current_vbumps) < 10000:
+        if len(self.current_vbumps) < 5000:
             if not self.current_vbumps:
                 return
             # 若尚未設定 substrate box，自動彈出設定視窗
