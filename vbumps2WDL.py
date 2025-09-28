@@ -114,7 +114,7 @@ class AABB:
     def edges_as_vbumps(self)->List[VBump]:
         ret = []
         for edge in self._edges():
-            ret.append(VBump()._from_setting(
+            ret.append(VBump.from_coords(
                 edge[0][0], edge[0][1], edge[0][2], 
                 edge[1][0], edge[1][1], edge[1][2],
                 self.D, self.group))

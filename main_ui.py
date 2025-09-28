@@ -8,6 +8,7 @@ from typing import List, Tuple
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import main
+import h5py
 
 
 class VBumpUI(QMainWindow):
@@ -158,12 +159,16 @@ class VBumpUI(QMainWindow):
                         self,
                         "Select File",
                         "",
-                        "CSV/VBump Files (*.csv *.CSV *.vbump *.VBUMP);;All Files (*)"
+                        "CSV/h5/VBump Files (*.csv *.CSV *.hdf5 *h5 *.vbump *.VBUMP);;All Files (*)"
                     )
         if not path:
             return
         try:
-            new_vbumps = main.load_csv(path)
+            new_vbumps = []
+            if h5py.is_hdf5(path):
+                new_vbumps = main.load_hdf5(path)
+            else:
+                new_vbumps = main.load_csv(path)
             self.loaded_vbumps.extend(new_vbumps)
             self.current_vbumps.extend(copy.deepcopy(new_vbumps))
             self.log(f"✅ Loaded {len(new_vbumps)} bumps from {path} (total {len(self.loaded_vbumps)})")
@@ -189,7 +194,10 @@ class VBumpUI(QMainWindow):
             return
         path, _ = QFileDialog.getSaveFileName(self, "Save CSV", "", "CSV Files (*.csv)")
         if path:
-            main.to_csv(path, self.current_vbumps)
+            if (len(self.current_vbumps) > 50000):
+                main.to_hdf5(path, self.current_vbumps)
+            else:
+                main.to_csv(path, self.current_vbumps)
             self.log(f"💾 Saved to {path}")
 
     # === 建立矩形 ===

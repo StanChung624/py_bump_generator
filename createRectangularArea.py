@@ -6,7 +6,7 @@ def create_rectangular_area_XY_by_pitch(
         x_pitch:float, y_pitch:float,
         diameter:float, group:int,
         z:float, height:float):
-    
+
     ret = []
 
     xmin = p0[0] if p0[0] < p1[0] else p1[0]
@@ -18,10 +18,10 @@ def create_rectangular_area_XY_by_pitch(
 
     while x < xmax:
         while y < ymax:
-            ret.append(VBump()._from_setting(x,y,z,x,y,z+height,diameter,group))
+            ret.append(VBump.from_coords(x, y, z, x, y, z + height, diameter, group))
             y += y_pitch
-        x+=x_pitch
-        y=ymin
+        x+= x_pitch
+        y = ymin
 
     print(f"✅ {len(ret)}  vbumps has been created.")
     return ret
@@ -31,10 +31,10 @@ def create_rectangular_area_XY_by_number(
         x_num:int, y_num:int,
         diameter:float, group:int,
         z:float, height:float):
-    
+
     x_pitch = abs(p1[0] - p0[0]) / x_num
     y_pitch = abs(p1[1] - p0[1]) / y_num
-    
+
     new_p0, new_p1 = [0,0], [0,0]
 
     new_p0[0] = (p0[0] + p1[0])/2 - (x_num/2)*x_pitch

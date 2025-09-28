@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-from VBumpDef import VBump, load_csv, to_csv
+from VBumpDef import VBump, load_csv, to_csv, load_hdf5, to_hdf5
 from createRectangularArea import (
     create_rectangular_area_XY_by_number,
     create_rectangular_area_XY_by_pitch,

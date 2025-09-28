@@ -11,7 +11,7 @@ def move_vbumps(selected_vbumps:List[VBump], reference_point:Tuple[float], new_p
     if keep_origin:
         ret += selected_vbumps
     for vb in selected_vbumps:
-        new_b = VBump(vb)+delta_u
+        new_b = VBump.from_other(vb) + delta_u
         if new_D:
             new_b.D = new_D
         if new_group:
