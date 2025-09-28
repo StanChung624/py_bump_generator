@@ -49,7 +49,12 @@ class VBumpUI(QMainWindow):
         mlayout = QFormLayout(mod_box)
         self.btn_modify_diam = QPushButton("Modify Diameter")
         self.btn_move = QPushButton("Move / Copy Bumps")
-        mlayout.addRow(self.btn_modify_diam, self.btn_move)
+        self.btn_delete_group = QPushButton("Delete Group")
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(self.btn_modify_diam)
+        btn_row.addWidget(self.btn_move)
+        btn_row.addWidget(self.btn_delete_group)
+        mlayout.addRow(btn_row)
         layout.addWidget(mod_box)
 
         # === Export / Plot ===
@@ -57,7 +62,7 @@ class VBumpUI(QMainWindow):
         explayout = QHBoxLayout(exp_box)
         self.btn_weldline = QPushButton("Export WDL (Weldline)")
         self.btn_airtrap = QPushButton("Export WDL (Airtrap)")
-        self.btn_plot = QPushButton("Plot AABB")
+        self.btn_plot = QPushButton("Plot")
         explayout.addWidget(self.btn_weldline)
         explayout.addWidget(self.btn_airtrap)
         explayout.addWidget(self.btn_plot)
@@ -75,6 +80,32 @@ class VBumpUI(QMainWindow):
         self.figure = Figure(figsize=(6, 4))
         self.canvas = FigureCanvas(self.figure)
         plot_layout.addWidget(self.canvas)
+        # === View Control Buttons ===
+        view_btn_layout = QHBoxLayout()
+        self.btn_view_top = QPushButton("Top")
+        self.btn_view_front = QPushButton("Front")
+        self.btn_view_right = QPushButton("Right")
+        self.btn_view_default = QPushButton("Default")
+
+        view_btn_layout.addWidget(self.btn_view_top)
+        view_btn_layout.addWidget(self.btn_view_front)
+        view_btn_layout.addWidget(self.btn_view_right)
+        view_btn_layout.addWidget(self.btn_view_default)
+        plot_layout.addLayout(view_btn_layout)
+
+        def set_view(elev, azim):
+            if not self.figure.axes:
+                QMessageBox.information(self, "Info", "Please plot something first.")
+                return
+            ax = self.figure.axes[0]
+            ax.view_init(elev=elev, azim=azim)
+            self.canvas.draw()
+
+        self.btn_view_top.clicked.connect(lambda: set_view(90, -90))
+        self.btn_view_front.clicked.connect(lambda: set_view(0, -90))
+        self.btn_view_right.clicked.connect(lambda: set_view(0, 0))
+        self.btn_view_default.clicked.connect(lambda: set_view(30, -60))
+        
         layout.addWidget(self.plot_box)
 
         # 綁定事件
@@ -84,6 +115,7 @@ class VBumpUI(QMainWindow):
         self.btn_create_count.clicked.connect(self.create_count)
         self.btn_modify_diam.clicked.connect(self.modify_diameter)
         self.btn_move.clicked.connect(self.move_bumps)
+        self.btn_delete_group.clicked.connect(self.delete_group)
         self.btn_weldline.clicked.connect(self.export_weldline)
         self.btn_airtrap.clicked.connect(self.export_airtrap)
         self.btn_plot.clicked.connect(self.plot_aabb)
@@ -159,7 +191,6 @@ class VBumpUI(QMainWindow):
         if path:
             main.to_csv(path, self.current_vbumps)
             self.log(f"💾 Saved to {path}")
-
 
     # === 建立矩形 ===
     def create_pitch(self):
@@ -307,6 +338,22 @@ class VBumpUI(QMainWindow):
         btn_cancel.clicked.connect(dlg.reject)
         dlg.exec()
 
+    def delete_group(self):
+        if not self.current_vbumps:
+            QMessageBox.warning(self, "Warning", "No bumps loaded.")
+            return
+        from PySide6.QtWidgets import QInputDialog
+        gid, ok = QInputDialog.getInt(self, "Delete Group", "Enter group ID to delete:", 1, 1, 9999)
+        if not ok:
+            return
+        before = len(self.current_vbumps)
+        self.current_vbumps = [b for b in self.current_vbumps if b.group != gid]
+        after = len(self.current_vbumps)
+        removed = before - after
+        self.log(f"🗑️ Deleted group {gid} ({removed} bumps removed).")
+        if self.substrate_p0 and self.substrate_p1:
+            self.plot_aabb()
+
     def move_bumps(self):
         if not self.current_vbumps:
             QMessageBox.warning(self, "Warning", "No bumps loaded.")
@@ -350,6 +397,8 @@ class VBumpUI(QMainWindow):
                 moved = main.move_vbumps(selected, ref, newp, new_g, new_d, keep)
                 if gid is not None and not keep:
                     self.current_vbumps = [b for b in self.current_vbumps if b.group != gid] + moved
+                elif gid is None and not keep:
+                    self.current_vbumps = [b for b in self.current_vbumps if b not in selected] + moved
                 else:
                     self.current_vbumps.extend(moved)
                 self.log(f"📤 Moved/duplicated {len(selected)} bumps")
@@ -386,22 +435,41 @@ class VBumpUI(QMainWindow):
         self.log(f"💨 Airtrap exported to {path}")
 
     def plot_aabb(self):
-        if not self.current_vbumps:
-            return
-        # 若尚未設定 substrate box，自動彈出設定視窗
-        if not self.substrate_p0 or not self.substrate_p1:
-            QMessageBox.information(self, "Info", "Substrate box not set. Please set it first.")
-            self.set_substrate_box()
-            # 若使用者取消設定則不繪圖
-            if not self.substrate_p0 or not self.substrate_p1:
+
+        if len(self.current_vbumps) < 10000:
+            if not self.current_vbumps:
                 return
-        # 清空舊圖
-        self.figure.clear()
-        ax = self.figure.add_subplot(111, projection='3d')
-        # 傳入 ax 給 main 模組繪圖
-        main.plot_vbumps_aabb(self.current_vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
-        self.canvas.draw()
-        self.log("📊 AABB plotted (embedded).")
+            # 若尚未設定 substrate box，自動彈出設定視窗
+            if not self.substrate_p0 or not self.substrate_p1:
+                QMessageBox.information(self, "Info", "Substrate box not set. Please set it first.")
+                self.set_substrate_box()
+                # 若使用者取消設定則不繪圖
+                if not self.substrate_p0 or not self.substrate_p1:
+                    return
+            # 清空舊圖
+            self.figure.clear()
+            ax = self.figure.add_subplot(111, projection='3d')
+            # 傳入 ax 給 main 模組繪圖
+            main.plot_vbumps(self.current_vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
+            self.canvas.draw()
+            self.log("📊 vbumps plotted.")
+        else:
+            if not self.current_vbumps:
+                return
+            # 若尚未設定 substrate box，自動彈出設定視窗
+            if not self.substrate_p0 or not self.substrate_p1:
+                QMessageBox.information(self, "Info", "Substrate box not set. Please set it first.")
+                self.set_substrate_box()
+                # 若使用者取消設定則不繪圖
+                if not self.substrate_p0 or not self.substrate_p1:
+                    return
+            # 清空舊圖
+            self.figure.clear()
+            ax = self.figure.add_subplot(111, projection='3d')
+            # 傳入 ax 給 main 模組繪圖
+            main.plot_vbumps_aabb(self.current_vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
+            self.canvas.draw()
+            self.log("📊 AABB plotted.")
 
     def set_substrate_box(self):
     # 彈出一個對話框，讓使用者輸入座標
@@ -448,3 +516,4 @@ if __name__ == "__main__":
     exit_code = app.exec()
     del ui
     sys.exit(exit_code)
+    

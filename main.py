@@ -12,6 +12,7 @@ from vbumps2WDL import (
     vbump_2_wdl_as_airtrap,
     vbump_2_wdl_as_weldline,
     vbump_2_wdl_as_weldline_AABB,
+    plot_vbumps,
     plot_vbumps_aabb
 )
 from vbumpsManipulation import modify_diameter, move_vbumps
