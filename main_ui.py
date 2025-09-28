@@ -192,13 +192,26 @@ class VBumpUI(QMainWindow):
         if not self.current_vbumps:
             QMessageBox.warning(self, "Warning", "No bumps to save.")
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Save CSV", "", "CSV Files (*.csv)")
-        if path:
-            if (len(self.current_vbumps) > 50000):
+        # Ask the user if they want to save as HDF5
+        reply = QMessageBox.question(
+            self,
+            "Save as HDF5?",
+            "Do you want to save the file as HDF5 format?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            path, _ = QFileDialog.getSaveFileName(self, "Save HDF5", "", "HDF5 Files (*.h5 *.hdf5)")
+            if path:
                 main.to_hdf5(path, self.current_vbumps)
-            else:
-                main.to_csv(path, self.current_vbumps)
-            self.log(f"💾 Saved to {path}")
+                self.log(f"💾 Saved to {path}")
+        else:
+            path, _ = QFileDialog.getSaveFileName(self, "Save CSV", "", "CSV Files (*.csv)")
+            if path:
+                if (len(self.current_vbumps) > 50000):
+                    main.to_hdf5(path, self.current_vbumps)
+                else:
+                    main.to_csv(path, self.current_vbumps)
+                self.log(f"💾 Saved to {path}")
 
     # === 建立矩形 ===
     def create_pitch(self):
