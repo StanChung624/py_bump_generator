@@ -151,7 +151,12 @@ def load_csv(filepath) -> List[VBump]:
 
 
 def to_hdf5(filepath: str, bumps: List[VBump], *, compression: str | int | None = 'gzip') -> None:
-    """Persist vbumps to an HDF5 file using a structured dataset. Requires h5py and numpy."""
+    """Persist vbumps to an HDF5 file using a structured dataset and record the bounding box.
+
+    Requires h5py and numpy. When bumps are present a `bounding_box` attribute is attached to
+    the dataset with rows `[min, max]` and columns `[x, y, z]`, with x/y extents expanded by
+    half the bump diameter.
+    """
     h5py = _require_h5py()
     np = _require_numpy()
     dtype = np.dtype([
@@ -165,6 +170,8 @@ def to_hdf5(filepath: str, bumps: List[VBump], *, compression: str | int | None 
         ('group', np.int32),
     ])
     data = np.empty((len(bumps),), dtype=dtype)
+    bbox_min = [float("inf"), float("inf"), float("inf")]
+    bbox_max = [float("-inf"), float("-inf"), float("-inf")]
     for idx, bump in enumerate(bumps):
         data[idx] = (
             bump.x0,
@@ -176,8 +183,29 @@ def to_hdf5(filepath: str, bumps: List[VBump], *, compression: str | int | None 
             bump.D,
             bump.group,
         )
+        half_d = bump.D / 2.0
+        x_min = min(bump.x0, bump.x1) - half_d
+        x_max = max(bump.x0, bump.x1) + half_d
+        y_min = min(bump.y0, bump.y1) - half_d
+        y_max = max(bump.y0, bump.y1) + half_d
+        z_min = min(bump.z0, bump.z1)
+        z_max = max(bump.z0, bump.z1)
+        if x_min < bbox_min[0]:
+            bbox_min[0] = x_min
+        if y_min < bbox_min[1]:
+            bbox_min[1] = y_min
+        if z_min < bbox_min[2]:
+            bbox_min[2] = z_min
+        if x_max > bbox_max[0]:
+            bbox_max[0] = x_max
+        if y_max > bbox_max[1]:
+            bbox_max[1] = y_max
+        if z_max > bbox_max[2]:
+            bbox_max[2] = z_max
     with h5py.File(filepath, 'w') as handle:
-        handle.create_dataset('vbump', data=data, compression=compression)
+        dset = handle.create_dataset('vbump', data=data, compression=compression)
+        if len(bumps) > 0:
+            dset.attrs['bounding_box'] = np.array([bbox_min, bbox_max], dtype=np.float64)
     print(f"📦 Successfully saved {len(bumps)} vbumps to {filepath}.")
 
 
