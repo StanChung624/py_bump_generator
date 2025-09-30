@@ -97,7 +97,9 @@ def create_rectangular_area_XY_by_pitch_to_hdf5(
     """Stream large pitch-based grids directly into an HDF5 dataset.
 
     Stores a `bounding_box` attribute on the resulting dataset with rows `[min, max]`
-    and columns `[x, y, z]`, where x/y extents include the bump radius.
+    and columns `[x, y, z]`, where x/y extents include the bump radius. The same
+    bounding box is mirrored under `groups/<group>/bounding_box` so consumers can
+    access per-group extents without scanning the dataset.
     """
     if chunk_size <= 0:
         raise ValueError("chunk_size must be positive.")
@@ -212,7 +214,11 @@ def create_rectangular_area_XY_by_pitch_to_hdf5(
         if written:
             bbox_min[2] = z_min
             bbox_max[2] = z_max
-            dset.attrs["bounding_box"] = np.array([bbox_min, bbox_max], dtype=np.float64)
+            bbox_array = np.array([bbox_min, bbox_max], dtype=np.float64)
+            dset.attrs["bounding_box"] = bbox_array
+            groups_root = handle.create_group("groups")
+            group_node = groups_root.create_group(str(group))
+            group_node.attrs["bounding_box"] = bbox_array
 
     if progress and total_estimate and written != last_report:
         pct = written / total_estimate * 100

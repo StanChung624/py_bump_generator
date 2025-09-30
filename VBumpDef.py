@@ -114,6 +114,21 @@ class VBump:
         return (self.x1, self.y1, self.z1)
 
 
+class VBumpCollection(list[VBump]):
+    """List-like container that exposes aggregate and per-group bounding boxes."""
+
+    def __init__(
+        self,
+        bumps: Iterable[VBump] | None = None,
+        *,
+        bounding_box: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None,
+        group_bounding_boxes: dict[int | str, tuple[tuple[float, float, float], tuple[float, float, float]]] | None = None,
+    ) -> None:
+        super().__init__(bumps or ())
+        self.bounding_box = bounding_box
+        self.group_bounding_boxes = group_bounding_boxes or {}
+
+
 def to_csv(filepath, bumps: List[VBump]):
     with open(filepath, "w", encoding="utf-8", newline="") as f:
         f.write("# Virtual Bump Configuration file. Unit:mm\n")
@@ -155,7 +170,8 @@ def to_hdf5(filepath: str, bumps: List[VBump], *, compression: str | int | None 
 
     Requires h5py and numpy. When bumps are present a `bounding_box` attribute is attached to
     the dataset with rows `[min, max]` and columns `[x, y, z]`, with x/y extents expanded by
-    half the bump diameter.
+    half the bump diameter. Bounding boxes are also recorded per group under `groups/<group>`
+    in the HDF5 output so consumers can query spatial extents without filtering the dataset.
     """
     h5py = _require_h5py()
     np = _require_numpy()
@@ -172,6 +188,7 @@ def to_hdf5(filepath: str, bumps: List[VBump], *, compression: str | int | None 
     data = np.empty((len(bumps),), dtype=dtype)
     bbox_min = [float("inf"), float("inf"), float("inf")]
     bbox_max = [float("-inf"), float("-inf"), float("-inf")]
+    group_bbox: dict[int, tuple[List[float], List[float]]] = {}
     for idx, bump in enumerate(bumps):
         data[idx] = (
             bump.x0,
@@ -190,6 +207,11 @@ def to_hdf5(filepath: str, bumps: List[VBump], *, compression: str | int | None 
         y_max = max(bump.y0, bump.y1) + half_d
         z_min = min(bump.z0, bump.z1)
         z_max = max(bump.z0, bump.z1)
+        group_entry = group_bbox.get(bump.group)
+        if group_entry is None:
+            group_entry = ([float("inf"), float("inf"), float("inf")], [float("-inf"), float("-inf"), float("-inf")])
+            group_bbox[bump.group] = group_entry
+        g_min, g_max = group_entry
         if x_min < bbox_min[0]:
             bbox_min[0] = x_min
         if y_min < bbox_min[1]:
@@ -202,21 +224,70 @@ def to_hdf5(filepath: str, bumps: List[VBump], *, compression: str | int | None 
             bbox_max[1] = y_max
         if z_max > bbox_max[2]:
             bbox_max[2] = z_max
+        if x_min < g_min[0]:
+            g_min[0] = x_min
+        if y_min < g_min[1]:
+            g_min[1] = y_min
+        if z_min < g_min[2]:
+            g_min[2] = z_min
+        if x_max > g_max[0]:
+            g_max[0] = x_max
+        if y_max > g_max[1]:
+            g_max[1] = y_max
+        if z_max > g_max[2]:
+            g_max[2] = z_max
     with h5py.File(filepath, 'w') as handle:
         dset = handle.create_dataset('vbump', data=data, compression=compression)
         if len(bumps) > 0:
-            dset.attrs['bounding_box'] = np.array([bbox_min, bbox_max], dtype=np.float64)
+            bbox_array = np.array([bbox_min, bbox_max], dtype=np.float64)
+            dset.attrs['bounding_box'] = bbox_array
+            groups_root = handle.create_group('groups')
+            for group_id, (g_min, g_max) in sorted(group_bbox.items()):
+                group_node = groups_root.create_group(str(group_id))
+                group_node.attrs['bounding_box'] = np.array([g_min, g_max], dtype=np.float64)
     print(f"📦 Successfully saved {len(bumps)} vbumps to {filepath}.")
 
 
-def load_hdf5(filepath: str) -> List[VBump]:
-    """Load vbumps from an HDF5 file produced by to_hdf5. Requires h5py and numpy."""
+def load_hdf5(filepath: str) -> VBumpCollection:
+    """Load vbumps and bounding boxes from an HDF5 file produced by to_hdf5."""
     h5py = _require_h5py()
     with h5py.File(filepath, 'r') as handle:
         if 'vbump' not in handle:
             raise KeyError("Dataset 'vbump' not found in file.")
-        data = handle['vbump'][...]
-    result: List[VBump] = []
+        dataset = handle['vbump']
+        data = dataset[...]
+        dataset_bbox_attr = dataset.attrs.get('bounding_box')
+
+        def _normalize_bbox(raw) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
+            if raw is None:
+                return None
+            rows = []
+            for row in raw:
+                if len(row) != 3:
+                    raise ValueError(
+                        "Expected bounding_box rows to provide three coordinates (x, y, z)."
+                    )
+                rows.append(tuple(float(coord) for coord in row))
+            if len(rows) != 2:
+                raise ValueError("Expected bounding_box to contain two rows for [min, max].")
+            return (rows[0], rows[1])
+
+        dataset_bbox = _normalize_bbox(dataset_bbox_attr)
+        group_bounding_boxes: dict[int | str, tuple[tuple[float, float, float], tuple[float, float, float]]] = {}
+        if 'groups' in handle:
+            groups_root = handle['groups']
+            for name, subgroup in groups_root.items():
+                bbox_attr = subgroup.attrs.get('bounding_box')
+                if bbox_attr is None:
+                    continue
+                try:
+                    group_id: int | str = int(name)
+                except ValueError:
+                    group_id = name
+                normalized = _normalize_bbox(bbox_attr)
+                if normalized is not None:
+                    group_bounding_boxes[group_id] = normalized
+    result = VBumpCollection(bounding_box=dataset_bbox, group_bounding_boxes=group_bounding_boxes)
     for row in data:
         result.append(
             VBump.from_coords(
