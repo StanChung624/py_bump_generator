@@ -124,9 +124,17 @@ def main() -> None:
         choice = input("Select an option: ").strip()
 
         if choice == "1":
-            path = input("Path to CSV file: ").strip()
+            path = input("Path to CSV/HDF5 file: ").strip()
             try:
-                new_vbumps = load_csv(path)
+                if path.lower().endswith(('.h5', '.hdf5')):
+                    new_vbumps = load_hdf5(path, max_rows=LARGE_VBUMP_THRESHOLD)
+                    gprint("Loaded HDF5 dataset.")
+                    if getattr(new_vbumps, "is_bounding_box_only", False):
+                        gprint(
+                            f"⚠️ Source contains {new_vbumps.source_count:,} bumps. Loaded bounding-box markers instead (threshold {LARGE_VBUMP_THRESHOLD:,})."
+                        )
+                else:
+                    new_vbumps = load_csv(path)
                 # Ask if user wants to change group ID
                 if prompt_yes_no("Change group ID of loaded bumps?", False):
                     new_group = prompt_int("Enter new group ID", None)
@@ -135,11 +143,13 @@ def main() -> None:
                             b.group = new_group
                         gprint(f"All loaded bumps set to group {new_group}.")
                 if prompt_yes_no("Replace current list with the new bumps? (No: append to current)", True):
-                    current_vbumps = new_vbumps
+                    current_vbumps = list(new_vbumps)
                 else:
                     current_vbumps.extend(new_vbumps)
             except FileNotFoundError:
-                gprint("CSV file not found.")
+                gprint("CSV/HDF5 file not found.")
+            except Exception as exc:
+                gprint(f"Failed to load file: {exc}")
 
         elif choice == "2":
             if not current_vbumps:

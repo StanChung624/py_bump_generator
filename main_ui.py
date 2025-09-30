@@ -223,8 +223,15 @@ class VBumpUI(QMainWindow):
         try:
             new_vbumps = []
             if h5py.is_hdf5(path):
-                new_vbumps = main.load_hdf5(path)
+                new_vbumps = main.load_hdf5(path, max_rows=main.LARGE_VBUMP_THRESHOLD)
                 self.log(f"✅ Loading hdf5 format")
+                if getattr(new_vbumps, "is_bounding_box_only", False):
+                    msg = (
+                        f"Source contains {new_vbumps.source_count:,} bumps. Loaded bounding-box markers instead "
+                        f"because the dataset exceeds the threshold {main.LARGE_VBUMP_THRESHOLD:,}."
+                    )
+                    self.log(f"⚠️ {msg}")
+                    QMessageBox.information(self, "Large Dataset", msg)
             else:
                 new_vbumps = main.load_csv(path)
                 self.log(f"✅ Loading csv format")
@@ -613,40 +620,23 @@ class VBumpUI(QMainWindow):
         self.log(f"💨 Airtrap exported to {path}")
 
     def plot_aabb(self):
-
-        if len(self.current_vbumps) < 5000:
-            if not self.current_vbumps:
-                return
-            # 若尚未設定 substrate box，自動彈出設定視窗
+        
+        if not self.current_vbumps:
+            return
+        # 若尚未設定 substrate box，自動彈出設定視窗
+        if not self.substrate_p0 or not self.substrate_p1:
+            QMessageBox.information(self, "Info", "Substrate box not set. Please set it first.")
+            self.set_substrate_box()
+            # 若使用者取消設定則不繪圖
             if not self.substrate_p0 or not self.substrate_p1:
-                self.set_substrate_box()
-                # 若使用者取消設定則不繪圖
-                if not self.substrate_p0 or not self.substrate_p1:
-                    return
-            # 清空舊圖
-            self.figure.clear()
-            ax = self.figure.add_subplot(111, projection='3d')
-            # 傳入 ax 給 main 模組繪圖
-            main.plot_vbumps(self.current_vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
-            self.canvas.draw()
-            self.log("📊 vbumps plotted.")
-        else:
-            if not self.current_vbumps:
                 return
-            # 若尚未設定 substrate box，自動彈出設定視窗
-            if not self.substrate_p0 or not self.substrate_p1:
-                QMessageBox.information(self, "Info", "Substrate box not set. Please set it first.")
-                self.set_substrate_box()
-                # 若使用者取消設定則不繪圖
-                if not self.substrate_p0 or not self.substrate_p1:
-                    return
-            # 清空舊圖
-            self.figure.clear()
-            ax = self.figure.add_subplot(111, projection='3d')
-            # 傳入 ax 給 main 模組繪圖
-            main.plot_vbumps_aabb(self.current_vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
-            self.canvas.draw()
-            self.log("📊 AABB plotted.")
+        # 清空舊圖
+        self.figure.clear()
+        ax = self.figure.add_subplot(111, projection='3d')
+        # 傳入 ax 給 main 模組繪圖
+        main.plot_vbumps_aabb(self.current_vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
+        self.canvas.draw()
+        self.log("📊 AABB plotted.")
 
     def set_substrate_box(self):
     # 彈出一個對話框，讓使用者輸入座標

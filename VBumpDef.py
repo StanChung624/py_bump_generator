@@ -123,10 +123,13 @@ class VBumpCollection(list[VBump]):
         *,
         bounding_box: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None,
         group_bounding_boxes: dict[int | str, tuple[tuple[float, float, float], tuple[float, float, float]]] | None = None,
+        source_count: int | None = None,
     ) -> None:
         super().__init__(bumps or ())
         self.bounding_box = bounding_box
         self.group_bounding_boxes = group_bounding_boxes or {}
+        self.source_count = source_count if source_count is not None else len(self)
+        self.is_bounding_box_only = False
 
 
 def to_csv(filepath, bumps: List[VBump]):
@@ -248,14 +251,42 @@ def to_hdf5(filepath: str, bumps: List[VBump], *, compression: str | int | None 
     print(f"📦 Successfully saved {len(bumps)} vbumps to {filepath}.")
 
 
-def load_hdf5(filepath: str) -> VBumpCollection:
+def _normalize_group_id(raw: int | str) -> int:
+    if isinstance(raw, int):
+        return raw
+    try:
+        return int(str(raw))
+    except ValueError:
+        return 0
+
+
+def _markers_from_bbox(
+    bbox_min: Iterable[float],
+    bbox_max: Iterable[float],
+    group: int | str,
+) -> list[VBump]:
+    x0, y0, z0 = bbox_min
+    x1, y1, z1 = bbox_max
+    gid = _normalize_group_id(group)
+    return [
+        VBump.from_coords(x0, y0, z0, x0, y0, z1, 0.0, gid),
+        VBump.from_coords(x1, y1, z0, x1, y1, z1, 0.0, gid),
+    ]
+
+
+def load_hdf5(
+    filepath: str,
+    *,
+    max_rows: int | None = None,
+    only_bounding_boxes: bool | None = None,
+) -> VBumpCollection:
     """Load vbumps and bounding boxes from an HDF5 file produced by to_hdf5."""
     h5py = _require_h5py()
     with h5py.File(filepath, 'r') as handle:
         if 'vbump' not in handle:
             raise KeyError("Dataset 'vbump' not found in file.")
         dataset = handle['vbump']
-        data = dataset[...]
+        total_rows = int(dataset.shape[0]) if dataset.shape else 0
         dataset_bbox_attr = dataset.attrs.get('bounding_box')
 
         def _normalize_bbox(raw) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
@@ -287,22 +318,43 @@ def load_hdf5(filepath: str) -> VBumpCollection:
                 normalized = _normalize_bbox(bbox_attr)
                 if normalized is not None:
                     group_bounding_boxes[group_id] = normalized
-    result = VBumpCollection(bounding_box=dataset_bbox, group_bounding_boxes=group_bounding_boxes)
-    for row in data:
-        result.append(
-            VBump.from_coords(
-                float(row['x0']),
-                float(row['y0']),
-                float(row['z0']),
-                float(row['x1']),
-                float(row['y1']),
-                float(row['z1']),
-                float(row['D']),
-                int(row['group']),
-            )
+        if only_bounding_boxes is None:
+            use_bounding_boxes = max_rows is not None and total_rows >= max_rows
+        else:
+            use_bounding_boxes = bool(only_bounding_boxes)
+
+        result = VBumpCollection(
+            bounding_box=dataset_bbox,
+            group_bounding_boxes=group_bounding_boxes,
+            source_count=total_rows,
         )
-    print(f"📥 Successfully loaded {len(result)} vbumps from {filepath}.")
-    return result
+        result.is_bounding_box_only = use_bounding_boxes
+
+        if use_bounding_boxes:
+            markers: list[VBump] = []
+            if group_bounding_boxes:
+                for group_id, (g_min, g_max) in group_bounding_boxes.items():
+                    markers.extend(_markers_from_bbox(g_min, g_max, group_id))
+            elif dataset_bbox is not None:
+                markers.extend(_markers_from_bbox(dataset_bbox[0], dataset_bbox[1], 0))
+            result.extend(markers)
+        else:
+            data = dataset[...]
+            for row in data:
+                result.append(
+                    VBump.from_coords(
+                        float(row['x0']),
+                        float(row['y0']),
+                        float(row['z0']),
+                        float(row['x1']),
+                        float(row['y1']),
+                        float(row['z1']),
+                        float(row['D']),
+                        int(row['group']),
+                    )
+                )
+        print(f"📥 Successfully loaded {len(result)} vbumps from {filepath} (source rows: {total_rows}).")
+        return result
 
 
 if __name__ == "__main__":
