@@ -405,7 +405,6 @@ def plot_vbumps_aabb(
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
-    ax.set_title("AABB of vbumps by group")
 
     if handles:
         ax.set_position([0.07, 0.1, 0.6, 0.8])
