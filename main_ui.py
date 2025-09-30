@@ -2,13 +2,31 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QLineEdit, QLabel, QFileDialog, QTextEdit, QCheckBox, QMessageBox, QGroupBox
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, QObject, Signal, Slot
 from PySide6.QtGui import QTextCursor
 from typing import List, Tuple
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import main
 import h5py
+
+
+class HDF5StreamWorker(QObject):
+    progress = Signal(str)
+    finished = Signal(int, str, list)
+    error = Signal(str)
+
+    def __init__(self, task, parent=None):
+        super().__init__(parent)
+        self._task = task
+
+    @Slot()
+    def run(self):
+        try:
+            written, path, markers = self._task(self.progress.emit)
+            self.finished.emit(written, path, markers)
+        except Exception as exc:
+            self.error.emit(str(exc))
 
 
 class VBumpUI(QMainWindow):
@@ -22,6 +40,7 @@ class VBumpUI(QMainWindow):
         self.current_vbumps: List[main.VBump] = []
         self.substrate_p0: Tuple[float, float, float] | None = None
         self.substrate_p1: Tuple[float, float, float] | None = None
+        self._stream_threads: list[QThread] = []
 
         # 主容器
         central = QWidget()
@@ -144,6 +163,7 @@ class VBumpUI(QMainWindow):
     def log(self, text):
         self.log_view.append(text)
         self.log_view.moveCursor(QTextCursor.End)
+        QApplication.processEvents()
 
     def f(self, edit: QLineEdit, default=None, cast=float):
         t = edit.text().strip()
@@ -153,6 +173,41 @@ class VBumpUI(QMainWindow):
             return cast(t)
         except ValueError:
             return default
+
+    def _start_stream_worker(self, task, dialog=None):
+        worker = HDF5StreamWorker(task)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self.log)
+        worker.finished.connect(lambda written, path, markers: self._stream_finished(thread, worker, written, path, markers))
+        worker.error.connect(lambda message: self._stream_error(thread, worker, message))
+        thread.start()
+        thread.worker = worker  # retain reference for the lifetime of the thread
+        self._stream_threads.append(thread)
+        if dialog is not None:
+            dialog.accept()
+
+    def _stream_finished(self, thread: QThread, worker: HDF5StreamWorker, written: int, path: str, markers: list[main.VBump]):
+        if markers:
+            self.current_vbumps.extend(markers)
+            self.log(f"📏 Stored {len(markers)} bounding-box markers in memory after streaming {written:,} bumps from {path}.")
+            if self.substrate_p0 and self.substrate_p1:
+                self.plot_aabb()
+        self._teardown_stream_thread(thread, worker)
+
+    def _stream_error(self, thread: QThread, worker: HDF5StreamWorker, message: str):
+        self.log(f"❌ Streaming failed: {message}")
+        QMessageBox.critical(self, "Stream Error", message)
+        self._teardown_stream_thread(thread, worker)
+
+    def _teardown_stream_thread(self, thread: QThread, worker: HDF5StreamWorker):
+        thread.quit()
+        thread.wait()
+        worker.deleteLater()
+        thread.deleteLater()
+        if thread in self._stream_threads:
+            self._stream_threads.remove(thread)
 
     # === 檔案操作 ===
     def load_csv(self):
@@ -256,15 +311,64 @@ class VBumpUI(QMainWindow):
                 group = int(group_edit.text()) if group_edit.text() else 1
                 z = float(z_edit.text())
                 h = float(h_edit.text())
-                new_vbumps = main.create_rectangular_area_XY_by_pitch(p0, p1, x_pitch, y_pitch, dia, group, z, h)
-                self.current_vbumps.extend(new_vbumps)
-                self.log(f"📐 Created {len(new_vbumps)} bumps by pitch")
-                dlg.accept()
-                # 新增: 若 substrate_p0 和 substrate_p1 已設，則繪圖
-                if self.substrate_p0 and self.substrate_p1:
-                    self.plot_aabb()
-            except Exception:
+            except ValueError:
                 QMessageBox.warning(self, "Warning", "Invalid input values.")
+                return
+
+            estimated = main.estimate_rectangular_area_XY_by_pitch_count(p0, p1, x_pitch, y_pitch)
+            try:
+                if estimated >= main.LARGE_VBUMP_THRESHOLD:
+                    QMessageBox.information(
+                        self,
+                        "Large Dataset",
+                        (
+                            f"The requested grid would generate {estimated:,} vbumps, which exceeds the in-memory limit "
+                            f"({main.LARGE_VBUMP_THRESHOLD:,}). The full dataset will be written to an HDF5 file."
+                            " Only two bounding-box markers will remain in memory."
+                        ),
+                    )
+                    path, _ = QFileDialog.getSaveFileName(
+                        self,
+                        "Save HDF5",
+                        "",
+                        "HDF5 Files (*.h5 *.hdf5)",
+                    )
+                    if not path:
+                        self.log("⚠️ Large dataset generation cancelled (no file selected).")
+                        return
+
+                    def task(log_emit):
+                        written = main.create_rectangular_area_XY_by_pitch_to_hdf5(
+                            path,
+                            p0,
+                            p1,
+                            x_pitch,
+                            y_pitch,
+                            dia,
+                            group,
+                            z,
+                            h,
+                            log_callback=log_emit,
+                        )
+                        markers = main.bounding_box_vbumps_for_rectangular_area(p0, p1, z, h, dia, group)
+                        return written, path, markers
+
+                    self.log(
+                        f"🚀 Streaming {estimated:,} bumps to {path}. Live progress will appear below."
+                    )
+                    self._start_stream_worker(task, dialog=dlg)
+                    return
+                else:
+                    new_vbumps = main.create_rectangular_area_XY_by_pitch(p0, p1, x_pitch, y_pitch, dia, group, z, h)
+                    self.log(f"📐 Created {len(new_vbumps)} bumps by pitch")
+            except Exception as exc:
+                QMessageBox.critical(self, "Error", str(exc))
+                return
+
+            self.current_vbumps.extend(new_vbumps)
+            dlg.accept()
+            if self.substrate_p0 and self.substrate_p1:
+                self.plot_aabb()
         btn_ok.clicked.connect(on_ok)
         btn_cancel.clicked.connect(dlg.reject)
         dlg.exec()
@@ -310,15 +414,67 @@ class VBumpUI(QMainWindow):
                 group = int(group_edit.text()) if group_edit.text() else 1
                 z = float(z_edit.text())
                 h = float(h_edit.text())
-                new_vbumps = main.create_rectangular_area_XY_by_number(p0, p1, x_num, y_num, dia, group, z, h)
-                self.current_vbumps.extend(new_vbumps)
-                self.log(f"📏 Created {len(new_vbumps)} bumps by count")
-                dlg.accept()
-                # 新增: 若 substrate_p0 和 substrate_p1 已設，則繪圖
-                if self.substrate_p0 and self.substrate_p1:
-                    self.plot_aabb()
-            except Exception:
+            except ValueError:
                 QMessageBox.warning(self, "Warning", "Invalid input values.")
+                return
+
+            estimated = main.estimate_rectangular_area_XY_by_number_count(x_num, y_num)
+            try:
+                if estimated >= main.LARGE_VBUMP_THRESHOLD:
+                    QMessageBox.information(
+                        self,
+                        "Large Dataset",
+                        (
+                            f"The requested grid would generate {estimated:,} vbumps, which exceeds the in-memory limit "
+                            f"({main.LARGE_VBUMP_THRESHOLD:,}). The full dataset will be written to an HDF5 file."
+                            " Only two bounding-box markers will remain in memory."
+                        ),
+                    )
+                    path, _ = QFileDialog.getSaveFileName(
+                        self,
+                        "Save HDF5",
+                        "",
+                        "HDF5 Files (*.h5 *.hdf5)",
+                    )
+                    if not path:
+                        self.log("⚠️ Large dataset generation cancelled (no file selected).")
+                        return
+
+                    def task(log_emit):
+                        new_p0, new_p1, x_pitch, y_pitch = main.normalize_rectangular_area_from_counts(
+                            p0, p1, x_num, y_num
+                        )
+                        written = main.create_rectangular_area_XY_by_number_to_hdf5(
+                            path,
+                            p0,
+                            p1,
+                            x_num,
+                            y_num,
+                            dia,
+                            group,
+                            z,
+                            h,
+                            log_callback=log_emit,
+                        )
+                        markers = main.bounding_box_vbumps_for_rectangular_area(new_p0, new_p1, z, h, dia, group)
+                        return written, path, markers
+
+                    self.log(
+                        f"🚀 Streaming {estimated:,} bumps to {path}. Live progress will appear below."
+                    )
+                    self._start_stream_worker(task, dialog=dlg)
+                    return
+                else:
+                    new_vbumps = main.create_rectangular_area_XY_by_number(p0, p1, x_num, y_num, dia, group, z, h)
+                    self.log(f"📏 Created {len(new_vbumps)} bumps by count")
+            except Exception as exc:
+                QMessageBox.critical(self, "Error", str(exc))
+                return
+
+            self.current_vbumps.extend(new_vbumps)
+            dlg.accept()
+            if self.substrate_p0 and self.substrate_p1:
+                self.plot_aabb()
         btn_ok.clicked.connect(on_ok)
         btn_cancel.clicked.connect(dlg.reject)
         dlg.exec()

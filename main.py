@@ -4,8 +4,15 @@ from typing import List, Tuple
 
 from VBumpDef import VBump, load_csv, to_csv, load_hdf5, to_hdf5
 from createRectangularArea import (
+    LARGE_VBUMP_THRESHOLD,
+    bounding_box_vbumps_for_rectangular_area,
     create_rectangular_area_XY_by_number,
+    create_rectangular_area_XY_by_number_to_hdf5,
     create_rectangular_area_XY_by_pitch,
+    create_rectangular_area_XY_by_pitch_to_hdf5,
+    estimate_rectangular_area_XY_by_number_count,
+    estimate_rectangular_area_XY_by_pitch_count,
+    normalize_rectangular_area_from_counts,
 )
 from fileManipulation import merge
 from vbumps2WDL import (
@@ -150,9 +157,41 @@ def main() -> None:
             group = prompt_int("Group", 1)
             z = prompt_float("Base Z")
             height = prompt_float("Height")
-            new_vbumps = create_rectangular_area_XY_by_pitch(
-                p0, p1, x_pitch, y_pitch, diameter, group, z, height
-            )
+            estimated = estimate_rectangular_area_XY_by_pitch_count(p0, p1, x_pitch, y_pitch)
+            if estimated >= LARGE_VBUMP_THRESHOLD:
+                gprint(
+                    f"⚠️ The requested grid would generate {estimated:,} vbumps, which exceeds the in-memory limit ({LARGE_VBUMP_THRESHOLD:,})."
+                )
+                gprint(
+                    "The full dataset will be streamed to an HDF5 file and only two bounding-box markers will remain in memory."
+                )
+                hdf5_path = ""
+                while not hdf5_path:
+                    hdf5_path = input("HDF5 output path: ").strip()
+                    if not hdf5_path:
+                        gprint("Please provide a valid file path.")
+                create_rectangular_area_XY_by_pitch_to_hdf5(
+                    hdf5_path,
+                    p0,
+                    p1,
+                    x_pitch,
+                    y_pitch,
+                    diameter,
+                    group,
+                    z,
+                    height,
+                    log_callback=lambda msg: gprint(msg),
+                )
+                new_vbumps = bounding_box_vbumps_for_rectangular_area(
+                    p0, p1, z, height, diameter, group
+                )
+                gprint(
+                    f"📏 Stored {len(new_vbumps)} bounding-box markers in memory. Full dataset saved to {hdf5_path}."
+                )
+            else:
+                new_vbumps = create_rectangular_area_XY_by_pitch(
+                    p0, p1, x_pitch, y_pitch, diameter, group, z, height
+                )
             if prompt_yes_no("Replace current list with the new bumps? (No: append to current)", True):
                 current_vbumps = new_vbumps
             else:
@@ -167,9 +206,42 @@ def main() -> None:
             group = prompt_int("Group", 1)
             z = prompt_float("Base Z")
             height = prompt_float("Height")
-            new_vbumps = create_rectangular_area_XY_by_number(
-                p0, p1, x_num, y_num, diameter, group, z, height
-            )
+            estimated = estimate_rectangular_area_XY_by_number_count(x_num, y_num)
+            if estimated >= LARGE_VBUMP_THRESHOLD:
+                gprint(
+                    f"⚠️ The requested grid would generate {estimated:,} vbumps, which exceeds the in-memory limit ({LARGE_VBUMP_THRESHOLD:,})."
+                )
+                gprint(
+                    "The full dataset will be streamed to an HDF5 file and only two bounding-box markers will remain in memory."
+                )
+                hdf5_path = ""
+                while not hdf5_path:
+                    hdf5_path = input("HDF5 output path: ").strip()
+                    if not hdf5_path:
+                        gprint("Please provide a valid file path.")
+                new_p0, new_p1, x_pitch, y_pitch = normalize_rectangular_area_from_counts(p0, p1, x_num, y_num)
+                create_rectangular_area_XY_by_number_to_hdf5(
+                    hdf5_path,
+                    p0,
+                    p1,
+                    x_num,
+                    y_num,
+                    diameter,
+                    group,
+                    z,
+                    height,
+                    log_callback=lambda msg: gprint(msg),
+                )
+                new_vbumps = bounding_box_vbumps_for_rectangular_area(
+                    new_p0, new_p1, z, height, diameter, group
+                )
+                gprint(
+                    f"📏 Stored {len(new_vbumps)} bounding-box markers in memory. Full dataset saved to {hdf5_path}."
+                )
+            else:
+                new_vbumps = create_rectangular_area_XY_by_number(
+                    p0, p1, x_num, y_num, diameter, group, z, height
+                )
             if prompt_yes_no("Replace current list with the new bumps? (No: append to current)", True):
                 current_vbumps = new_vbumps
             else:

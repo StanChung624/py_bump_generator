@@ -1,9 +1,83 @@
 from __future__ import annotations
 
 import math
-from typing import Tuple
+from typing import Callable, Tuple
 
-from VBumpDef import VBump, to_csv, _require_h5py, _require_numpy
+from VBumpDef import VBump, _require_h5py, _require_numpy
+from vbumps2WDL import AABB
+
+LARGE_VBUMP_THRESHOLD = 20_000_000
+
+
+def _emit_log(
+    callback: Callable[[str], None] | None,
+    message: str,
+    *,
+    flush: bool = False,
+) -> None:
+    """Send progress or completion messages to the provided logger or stdout."""
+    if callback:
+        callback(message)
+    else:
+        print(message, flush=flush)
+
+
+def _rectangular_bounds(
+    p0: Tuple[float],
+    p1: Tuple[float],
+    z: float,
+    height: float,
+) -> Tuple[float, float, float, float, float, float]:
+    """Return axis-aligned bounds for a rectangular column defined by p0/p1 and z/height."""
+    xmin = p0[0] if p0[0] < p1[0] else p1[0]
+    ymin = p0[1] if p0[1] < p1[1] else p1[1]
+    xmax = p0[0] if p0[0] > p1[0] else p1[0]
+    ymax = p0[1] if p0[1] > p1[1] else p1[1]
+    zmin = z if z <= z + height else z + height
+    zmax = z + height if z <= z + height else z
+    return xmin, ymin, zmin, xmax, ymax, zmax
+
+
+def bounding_box_vbumps_for_rectangular_area(
+    p0: Tuple[float],
+    p1: Tuple[float],
+    z: float,
+    height: float,
+    diameter: float,
+    group: int,
+) -> list[VBump]:
+    """Represent the rectangular area with two VBumps aligned to opposite vertical edges."""
+    xmin, ymin, zmin, xmax, ymax, zmax = _rectangular_bounds(p0, p1, z, height)
+    corner_a = VBump.from_coords(xmin, ymin, zmin, xmin, ymin, zmax, diameter, group)
+    corner_b = VBump.from_coords(xmax, ymax, zmin, xmax, ymax, zmax, diameter, group)
+    aabb = AABB()
+    aabb.add(corner_a)
+    aabb.add(corner_b)
+    edges = aabb.edges_as_vbumps()
+    if len(edges) >= 12:
+        # Pick two opposite vertical edges to outline the bounding box succinctly.
+        return [edges[8], edges[10]]
+    return [corner_a, corner_b]
+
+
+def normalize_rectangular_area_from_counts(
+    p0: Tuple[float],
+    p1: Tuple[float],
+    x_num: int,
+    y_num: int,
+) -> Tuple[Tuple[float, float], Tuple[float, float], float, float]:
+    """Normalize count-based inputs into explicit bounds and pitch distances."""
+    if x_num <= 0 or y_num <= 0:
+        raise ValueError("Counts must be positive numbers.")
+    x_pitch = abs(p1[0] - p0[0]) / x_num
+    y_pitch = abs(p1[1] - p0[1]) / y_num
+    new_p0 = [0.0, 0.0]
+    new_p1 = [0.0, 0.0]
+    new_p0[0] = (p0[0] + p1[0]) / 2 - (x_num / 2) * x_pitch
+    new_p1[0] = (p0[0] + p1[0]) / 2 + (x_num / 2) * x_pitch
+    new_p0[1] = (p0[1] + p1[1]) / 2 - (y_num / 2) * y_pitch
+    new_p1[1] = (p0[1] + p1[1]) / 2 + (y_num / 2) * y_pitch
+    return tuple(new_p0), tuple(new_p1), x_pitch, y_pitch
 
 
 def estimate_rectangular_area_XY_by_pitch_count(
@@ -40,18 +114,16 @@ def create_rectangular_area_XY_by_pitch(
 
     ret = []
 
-    xmin = p0[0] if p0[0] < p1[0] else p1[0]
-    ymin = p0[1] if p0[1] < p1[1] else p1[1]
-    xmax = p0[0] if p0[0] > p1[0] else p1[0]
-    ymax = p0[1] if p0[1] > p1[1] else p1[1]
+    xmin, ymin, _zmin, xmax, ymax, _zmax = _rectangular_bounds(p0, p1, z, height)
 
-    x = xmin; y = ymin
+    x = xmin
+    y = ymin
 
     while x < xmax:
         while y < ymax:
             ret.append(VBump.from_coords(x, y, z, x, y, z + height, diameter, group))
             y += y_pitch
-        x+= x_pitch
+        x += x_pitch
         y = ymin
 
     print(f"✅ {len(ret)}  vbumps has been created.")
@@ -64,16 +136,7 @@ def create_rectangular_area_XY_by_number(
         diameter:float, group:int,
         z:float, height:float):
 
-    x_pitch = abs(p1[0] - p0[0]) / x_num
-    y_pitch = abs(p1[1] - p0[1]) / y_num
-
-    new_p0, new_p1 = [0,0], [0,0]
-
-    new_p0[0] = (p0[0] + p1[0])/2 - (x_num/2)*x_pitch
-    new_p1[0] = (p0[0] + p1[0])/2 + (x_num/2)*x_pitch
-    new_p0[1] = (p0[1] + p1[1])/2 - (y_num/2)*y_pitch
-    new_p1[1] = (p0[1] + p1[1])/2 + (y_num/2)*y_pitch
-
+    new_p0, new_p1, x_pitch, y_pitch = normalize_rectangular_area_from_counts(p0, p1, x_num, y_num)
     return create_rectangular_area_XY_by_pitch(
         new_p0, new_p1, x_pitch, y_pitch, diameter, group, z, height)
 
@@ -93,6 +156,7 @@ def create_rectangular_area_XY_by_pitch_to_hdf5(
     compression: str | int | None = "gzip",
     progress: bool = True,
     progress_interval: int | None = None,
+    log_callback: Callable[[str], None] | None = None,
 ) -> int:
     """Stream large pitch-based grids directly into an HDF5 dataset.
 
@@ -117,10 +181,7 @@ def create_rectangular_area_XY_by_pitch_to_hdf5(
         ("group", np.int32),
     ])
 
-    xmin = p0[0] if p0[0] < p1[0] else p1[0]
-    ymin = p0[1] if p0[1] < p1[1] else p1[1]
-    xmax = p0[0] if p0[0] > p1[0] else p1[0]
-    ymax = p0[1] if p0[1] > p1[1] else p1[1]
+    xmin, ymin, zmin, xmax, ymax, zmax = _rectangular_bounds(p0, p1, z, height)
     z1 = z + height
 
     nx = math.ceil(abs(xmax - xmin) / x_pitch) if abs(xmax - xmin) else 0
@@ -130,8 +191,8 @@ def create_rectangular_area_XY_by_pitch_to_hdf5(
         with h5py.File(filepath, "w") as handle:
             handle.create_dataset("vbump", shape=(0,), maxshape=(None,), dtype=dtype)
         if progress:
-            print("... 0/0 (0.0%)", flush=True)
-        print(f"📦 Successfully streamed 0 vbumps into {filepath} (estimated 0).")
+            _emit_log(log_callback, "... 0/0 (0.0%)", flush=True)
+        _emit_log(log_callback, f"📦 Successfully streamed 0 vbumps into {filepath} (estimated 0).")
         return 0
 
     chunk_len = max(1, min(chunk_size, total_estimate or chunk_size))
@@ -159,8 +220,8 @@ def create_rectangular_area_XY_by_pitch_to_hdf5(
         last_report = 0
         bbox_min = [math.inf, math.inf, math.inf]
         bbox_max = [-math.inf, -math.inf, -math.inf]
-        z_min = min(z, z1)
-        z_max = max(z, z1)
+        z_min = zmin
+        z_max = zmax
         half_d = diameter / 2
 
         for ix in range(nx):
@@ -202,7 +263,7 @@ def create_rectangular_area_XY_by_pitch_to_hdf5(
                     if progress_interval and written - last_report >= progress_interval:
                         last_report = written
                         pct = written / total_estimate * 100
-                        print(f"... {written}/{total_estimate} ({pct:.1f}%)", flush=True)
+                        _emit_log(log_callback, f"... {written}/{total_estimate} ({pct:.1f}%)", flush=True)
         if buf_pos:
             dset.resize((written + buf_pos,))
             dset[written:written + buf_pos] = buffer[:buf_pos]
@@ -210,7 +271,7 @@ def create_rectangular_area_XY_by_pitch_to_hdf5(
             if progress_interval and written - last_report >= progress_interval:
                 last_report = written
                 pct = written / total_estimate * 100 if total_estimate else 0.0
-                print(f"... {written}/{total_estimate} ({pct:.1f}%)", flush=True)
+                _emit_log(log_callback, f"... {written}/{total_estimate} ({pct:.1f}%)", flush=True)
         if written:
             bbox_min[2] = z_min
             bbox_max[2] = z_max
@@ -222,8 +283,11 @@ def create_rectangular_area_XY_by_pitch_to_hdf5(
 
     if progress and total_estimate and written != last_report:
         pct = written / total_estimate * 100
-        print(f"... {written}/{total_estimate} ({pct:.1f}%)", flush=True)
-    print(f"📦 Successfully streamed {written} vbumps into {filepath} (estimated {total_estimate}).")
+        _emit_log(log_callback, f"... {written}/{total_estimate} ({pct:.1f}%)", flush=True)
+    _emit_log(
+        log_callback,
+        f"📦 Successfully streamed {written} vbumps into {filepath} (estimated {total_estimate}).",
+    )
     return written
 
 def create_rectangular_area_XY_by_number_to_hdf5(
@@ -241,22 +305,14 @@ def create_rectangular_area_XY_by_number_to_hdf5(
     compression: str | int | None = "gzip",
     progress: bool = True,
     progress_interval: int | None = None,
+    log_callback: Callable[[str], None] | None = None,
 ) -> int:
     """Stream count-based grids directly into an HDF5 dataset.
 
     Delegates to the pitch-based routine, inheriting the `bounding_box`
     metadata that captures the overall extents.
     """
-    if x_num <= 0 or y_num <= 0:
-        raise ValueError("Counts must be positive for streaming output.")
-    x_pitch = abs(p1[0] - p0[0]) / x_num
-    y_pitch = abs(p1[1] - p0[1]) / y_num
-    new_p0 = [0.0, 0.0]
-    new_p1 = [0.0, 0.0]
-    new_p0[0] = (p0[0] + p1[0]) / 2 - (x_num / 2) * x_pitch
-    new_p1[0] = (p0[0] + p1[0]) / 2 + (x_num / 2) * x_pitch
-    new_p0[1] = (p0[1] + p1[1]) / 2 - (y_num / 2) * y_pitch
-    new_p1[1] = (p0[1] + p1[1]) / 2 + (y_num / 2) * y_pitch
+    new_p0, new_p1, x_pitch, y_pitch = normalize_rectangular_area_from_counts(p0, p1, x_num, y_num)
     return create_rectangular_area_XY_by_pitch_to_hdf5(
         filepath,
         tuple(new_p0),
@@ -271,6 +327,7 @@ def create_rectangular_area_XY_by_number_to_hdf5(
         compression=compression,
         progress=progress,
         progress_interval=progress_interval,
+        log_callback=log_callback,
     )
 
 
