@@ -287,8 +287,14 @@ def plot_vbumps(
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
-    plt.title("Vbumps by group")
-    ax.legend(handles=handles, title="Legend", loc="upper right", bbox_to_anchor=(1.05, 1), borderaxespad=0.)
+    ax.set_title("Vbumps by group")
+
+    if handles:
+        ax.set_position([0.07, 0.1, 0.6, 0.8])
+        legend_ax = ax.figure.add_axes([0.72, 0.1, 0.25, 0.8])
+        legend_ax.axis('off')
+        legend_ax.legend(handles=handles, title="Legend", loc='center', frameon=True)
+            
 
     # Compute axis limits
     xs, ys, zs = [], [], []
@@ -399,8 +405,13 @@ def plot_vbumps_aabb(
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
-    plt.title("AABB of vbumps by group")
-    ax.legend(handles=handles, title="Legend", loc="upper right", bbox_to_anchor=(1.05, 1), borderaxespad=0.)
+    ax.set_title("AABB of vbumps by group")
+
+    if handles:
+        ax.set_position([0.07, 0.1, 0.6, 0.8])
+        legend_ax = ax.figure.add_axes([0.72, 0.1, 0.25, 0.8])
+        legend_ax.axis('off')
+        legend_ax.legend(handles=handles, title="Legend", loc='center', frameon=True)
     
     # Compute axis limits from all AABBs and substrate
     xs, ys, zs = [], [], []

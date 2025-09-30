@@ -26,6 +26,7 @@ class VBumpUI(QMainWindow):
         # 主容器
         central = QWidget()
         layout = QVBoxLayout(central)
+        layout.setContentsMargins(10, 10, 10, 10)
         self.setCentralWidget(central)
 
         # === File 操作 ===
@@ -69,13 +70,11 @@ class VBumpUI(QMainWindow):
         explayout.addWidget(self.btn_plot)
         layout.addWidget(exp_box)
 
-        # === Log ===
+        # === Log & Plot (並排顯示) ===
         layout.addWidget(QLabel("🧾 Log Output:"))
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
-        layout.addWidget(self.log_view, stretch=1)
 
-        # === Plot Output ===
         self.plot_box = QGroupBox("📊 Plot Preview")
         plot_layout = QVBoxLayout(self.plot_box)
         self.figure = Figure(figsize=(6, 4))
@@ -106,8 +105,11 @@ class VBumpUI(QMainWindow):
         self.btn_view_front.clicked.connect(lambda: set_view(0, -90))
         self.btn_view_right.clicked.connect(lambda: set_view(0, 0))
         self.btn_view_default.clicked.connect(lambda: set_view(30, -60))
-        
-        layout.addWidget(self.plot_box)
+
+        bottom_split = QHBoxLayout()
+        bottom_split.addWidget(self.log_view, stretch=1)
+        bottom_split.addWidget(self.plot_box, stretch=2)
+        layout.addLayout(bottom_split, stretch=1)
 
         # 綁定事件
         self.btn_load.clicked.connect(self.load_csv)
@@ -207,10 +209,7 @@ class VBumpUI(QMainWindow):
         else:
             path, _ = QFileDialog.getSaveFileName(self, "Save CSV", "", "CSV Files (*.csv)")
             if path:
-                if (len(self.current_vbumps) > 50000):
-                    main.to_hdf5(path, self.current_vbumps)
-                else:
-                    main.to_csv(path, self.current_vbumps)
+                main.to_csv(path, self.current_vbumps)
                 self.log(f"💾 Saved to {path}")
 
     # === 建立矩形 ===
