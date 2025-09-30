@@ -169,8 +169,10 @@ class VBumpUI(QMainWindow):
             new_vbumps = []
             if h5py.is_hdf5(path):
                 new_vbumps = main.load_hdf5(path)
+                self.log(f"✅ Loading hdf5 format")
             else:
                 new_vbumps = main.load_csv(path)
+                self.log(f"✅ Loading csv format")
             self.loaded_vbumps.extend(new_vbumps)
             self.current_vbumps.extend(copy.deepcopy(new_vbumps))
             self.log(f"✅ Loaded {len(new_vbumps)} bumps from {path} (total {len(self.loaded_vbumps)})")
@@ -439,7 +441,7 @@ class VBumpUI(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "Save WDL (weldline)", "", "WDL Files (*.wdl)")
         if not path:
             return
-        if len(self.current_vbumps) < 300000:
+        if len(self.current_vbumps) < 20000:
             main.vbump_2_wdl_as_weldline(path, self.current_vbumps)
         else:
             main.vbump_2_wdl_as_weldline_AABB(path, self.current_vbumps)
