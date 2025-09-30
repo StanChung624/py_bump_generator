@@ -147,14 +147,14 @@ class VBumpUI(QMainWindow):
 
     # === 工具函式 ===
     def _pair(self, edits):
-        box = QWidget()
+        box = QWidget(self)
         layout = QHBoxLayout(box)
         for e in edits:
             layout.addWidget(e)
         return box
 
     def _triple(self, edits):
-        box = QWidget()
+        box = QWidget(self)
         layout = QHBoxLayout(box)
         for e in edits:
             layout.addWidget(e)
@@ -208,6 +208,36 @@ class VBumpUI(QMainWindow):
         thread.deleteLater()
         if thread in self._stream_threads:
             self._stream_threads.remove(thread)
+        # Detach to avoid double-free on QApplication teardown
+        try:
+            thread.setParent(None)
+        except Exception:
+            pass
+
+    def closeEvent(self, event):
+        # Gracefully stop any worker threads
+        for t in list(self._stream_threads):
+            try:
+                t.quit()
+                t.wait()
+                try:
+                    t.setParent(None)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        self._stream_threads.clear()
+        # Explicitly detach and delete matplotlib canvas to avoid double free
+        if hasattr(self, "canvas") and self.canvas is not None:
+            try:
+                self.canvas.setParent(None)
+            except Exception:
+                pass
+            try:
+                del self.canvas
+            except Exception:
+                pass
+        super().closeEvent(event)
 
     # === 檔案操作 ===
     def load_csv(self):
@@ -619,13 +649,11 @@ class VBumpUI(QMainWindow):
         main.vbump_2_wdl_as_airtrap(path, self.current_vbumps)
         self.log(f"💨 Airtrap exported to {path}")
 
-    def plot_aabb(self):
-        
+    def plot_aabb(self):        
         if not self.current_vbumps:
             return
         # 若尚未設定 substrate box，自動彈出設定視窗
         if not self.substrate_p0 or not self.substrate_p1:
-            QMessageBox.information(self, "Info", "Substrate box not set. Please set it first.")
             self.set_substrate_box()
             # 若使用者取消設定則不繪圖
             if not self.substrate_p0 or not self.substrate_p1:
@@ -680,7 +708,4 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     ui = VBumpUI()
     ui.show()
-    exit_code = app.exec()
-    del ui
-    sys.exit(exit_code)
-    
+    sys.exit(app.exec())
