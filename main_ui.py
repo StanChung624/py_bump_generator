@@ -461,7 +461,6 @@ class VBumpUI(QMainWindow):
                 return
             # 若尚未設定 substrate box，自動彈出設定視窗
             if not self.substrate_p0 or not self.substrate_p1:
-                QMessageBox.information(self, "Info", "Substrate box not set. Please set it first.")
                 self.set_substrate_box()
                 # 若使用者取消設定則不繪圖
                 if not self.substrate_p0 or not self.substrate_p1:
