@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-from VBumpDef import VBump, load_csv, to_csv, load_hdf5, to_hdf5
-from createRectangularArea import (
+from VBump.Basic import VBump, load_csv, to_csv, load_hdf5, to_hdf5
+from VBump.CreateRectangularArea import (
     LARGE_VBUMP_THRESHOLD,
     bounding_box_vbumps_for_rectangular_area,
     create_rectangular_area_XY_by_number,
@@ -14,15 +14,14 @@ from createRectangularArea import (
     estimate_rectangular_area_XY_by_pitch_count,
     normalize_rectangular_area_from_counts,
 )
-from fileManipulation import merge
-from vbumps2WDL import (
+from VBump.FileManip import merge
+from VBump.ExportWDL import (
     vbump_2_wdl_as_airtrap,
     vbump_2_wdl_as_weldline,
-    vbump_2_wdl_as_weldline_AABB,
-    plot_vbumps,
-    plot_vbumps_aabb
+    vbump_2_wdl_as_weldline_AABB
 )
-from vbumpsManipulation import modify_diameter, modify_height, move_vbumps
+from VBump.VBumpPlot import (plot_vbumps, plot_vbumps_aabb)
+from VBump.VBumpsManip import modify_diameter, modify_height, move_vbumps
 
 GREEN = "\033[92m"
 RESET = "\033[0m"
