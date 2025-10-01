@@ -655,14 +655,39 @@ class VBumpUI(QMainWindow):
                 new_d = float(new_diam_edit.text()) if new_diam_edit.text() else None
                 new_g = int(new_group_edit.text()) if new_group_edit.text() else None
                 selected = [b for b in self.current_vbumps if gid is None or b.group == gid]
+                if not selected:
+                    QMessageBox.information(self, "Info", "No bumps matched the filter.")
+                    return
+
+                auto_group_map = {}
+                if keep and gid is None and new_g is None:
+                    existing_groups = [b.group for b in self.current_vbumps if isinstance(b.group, int)]
+                    max_group = max(existing_groups) if existing_groups else 0
+                    for b in selected:
+                        g = b.group
+                        if g not in auto_group_map:
+                            max_group += 1
+                            auto_group_map[g] = max_group
+
                 moved = main.move_vbumps(selected, ref, newp, new_g, new_d, keep)
+                copies = moved[len(selected):] if keep else moved
+
+                if auto_group_map:
+                    for original, clone in zip(selected, copies):
+                        clone.group = auto_group_map.get(original.group, clone.group)
+
                 if gid is not None and not keep:
                     self.current_vbumps = [b for b in self.current_vbumps if b.group != gid] + moved
                 elif gid is None and not keep:
                     self.current_vbumps = [b for b in self.current_vbumps if b not in selected] + moved
                 else:
-                    self.current_vbumps.extend(moved)
-                self.log(f"📤 Moved/duplicated {len(selected)} bumps")
+                    self.current_vbumps.extend(copies)
+
+                if auto_group_map:
+                    assigned = ", ".join(str(v) for v in sorted(auto_group_map.values()))
+                    self.log(f"📤 Duplicated {len(selected)} bumps with new groups {assigned}")
+                else:
+                    self.log(f"📤 Moved/duplicated {len(selected)} bumps")
                 # 新增: 若 substrate_p0 和 substrate_p1 已設，則繪圖
                 if self.substrate_p0 and self.substrate_p1:
                     self.plot_aabb()
