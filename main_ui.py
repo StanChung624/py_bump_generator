@@ -298,7 +298,8 @@ class VBumpUI(QMainWindow):
         if reply == QMessageBox.Yes:
             path, _ = QFileDialog.getSaveFileName(self, "Save HDF5", "", "HDF5 Files (*.h5 *.hdf5)")
             if path:
-                main.to_hdf5(path, self.current_vbumps)
+                self.log(f"🚀 Streaming {len(self.current_vbumps):,} bumps to {path}.")
+                main.to_hdf5(path, self.current_vbumps, log_callback=self.log)
                 self.log(f"💾 Saved to {path}")
         else:
             path, _ = QFileDialog.getSaveFileName(self, "Save CSV", "", "CSV Files (*.csv)")

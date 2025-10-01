@@ -1,8 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List
+from typing import Callable, Iterable, List
 import csv
+
+
+def _emit_log(
+    callback: Callable[[str], None] | None,
+    message: str,
+    *,
+    flush: bool = False,
+) -> None:
+    """Send progress messages to the UI log callback when available."""
+    if callback:
+        callback(message)
+    else:
+        print(message, flush=flush)
 
 
 def _require_h5py():
@@ -168,14 +181,28 @@ def load_csv(filepath) -> List[VBump]:
     return ret
 
 
-def to_hdf5(filepath: str, bumps: List[VBump], *, compression: str | int | None = 'gzip') -> None:
-    """Persist vbumps to an HDF5 file using a structured dataset and record the bounding box.
+def to_hdf5(
+    filepath: str,
+    bumps: List[VBump],
+    *,
+    compression: str | int | None = 'gzip',
+    chunk_size: int = 1_000_000,
+    progress: bool = True,
+    progress_interval: int | None = None,
+    log_callback: Callable[[str], None] | None = None,
+) -> None:
+    """Persist vbumps to an HDF5 file chunk-by-chunk and record bounding boxes.
 
-    Requires h5py and numpy. When bumps are present a `bounding_box` attribute is attached to
-    the dataset with rows `[min, max]` and columns `[x, y, z]`, with x/y extents expanded by
-    half the bump diameter. Bounding boxes are also recorded per group under `groups/<group>`
-    in the HDF5 output so consumers can query spatial extents without filtering the dataset.
+    Requires h5py and numpy. Data is streamed into a structured dataset using chunks so that
+    very large bump collections do not require an intermediate NumPy allocation. When bumps
+    are present a `bounding_box` attribute is attached to the dataset with rows `[min, max]`
+    and columns `[x, y, z]`, with x/y extents expanded by half the bump diameter. Bounding
+    boxes are also recorded per group under `groups/<group>` in the HDF5 output so consumers
+    can query spatial extents without filtering the dataset. Progress updates are emitted via
+    ``log_callback`` when supplied.
     """
+    if chunk_size <= 0:
+        raise ValueError('chunk_size must be positive.')
     h5py = _require_h5py()
     np = _require_numpy()
     dtype = np.dtype([
@@ -188,67 +215,121 @@ def to_hdf5(filepath: str, bumps: List[VBump], *, compression: str | int | None 
         ('D', np.float64),
         ('group', np.int32),
     ])
-    data = np.empty((len(bumps),), dtype=dtype)
-    bbox_min = [float("inf"), float("inf"), float("inf")]
-    bbox_max = [float("-inf"), float("-inf"), float("-inf")]
+    total = len(bumps)
+    if total == 0:
+        with h5py.File(filepath, 'w') as handle:
+            handle.create_dataset('vbump', shape=(0,), maxshape=(None,), dtype=dtype)
+        if progress:
+            _emit_log(log_callback, '... 0/0 (0.0%)', flush=True)
+        _emit_log(log_callback, f"📦 Successfully saved 0 vbumps to {filepath}.")
+        return
+
+    chunk_len = max(1, min(chunk_size, total))
+    if progress:
+        if progress_interval is None:
+            progress_interval = max(chunk_len, total // 100 or 1)
+        else:
+            progress_interval = max(1, progress_interval)
+    else:
+        progress_interval = None
+
+    bbox_min = [float('inf'), float('inf'), float('inf')]
+    bbox_max = [float('-inf'), float('-inf'), float('-inf')]
     group_bbox: dict[int, tuple[List[float], List[float]]] = {}
-    for idx, bump in enumerate(bumps):
-        data[idx] = (
-            bump.x0,
-            bump.y0,
-            bump.z0,
-            bump.x1,
-            bump.y1,
-            bump.z1,
-            bump.D,
-            bump.group,
-        )
-        half_d = bump.D / 2.0
-        x_min = min(bump.x0, bump.x1) - half_d
-        x_max = max(bump.x0, bump.x1) + half_d
-        y_min = min(bump.y0, bump.y1) - half_d
-        y_max = max(bump.y0, bump.y1) + half_d
-        z_min = min(bump.z0, bump.z1)
-        z_max = max(bump.z0, bump.z1)
-        group_entry = group_bbox.get(bump.group)
-        if group_entry is None:
-            group_entry = ([float("inf"), float("inf"), float("inf")], [float("-inf"), float("-inf"), float("-inf")])
-            group_bbox[bump.group] = group_entry
-        g_min, g_max = group_entry
-        if x_min < bbox_min[0]:
-            bbox_min[0] = x_min
-        if y_min < bbox_min[1]:
-            bbox_min[1] = y_min
-        if z_min < bbox_min[2]:
-            bbox_min[2] = z_min
-        if x_max > bbox_max[0]:
-            bbox_max[0] = x_max
-        if y_max > bbox_max[1]:
-            bbox_max[1] = y_max
-        if z_max > bbox_max[2]:
-            bbox_max[2] = z_max
-        if x_min < g_min[0]:
-            g_min[0] = x_min
-        if y_min < g_min[1]:
-            g_min[1] = y_min
-        if z_min < g_min[2]:
-            g_min[2] = z_min
-        if x_max > g_max[0]:
-            g_max[0] = x_max
-        if y_max > g_max[1]:
-            g_max[1] = y_max
-        if z_max > g_max[2]:
-            g_max[2] = z_max
+
     with h5py.File(filepath, 'w') as handle:
-        dset = handle.create_dataset('vbump', data=data, compression=compression)
-        if len(bumps) > 0:
+        dset = handle.create_dataset(
+            'vbump',
+            shape=(total,),
+            maxshape=(total,),
+            dtype=dtype,
+            compression=compression,
+            chunks=(chunk_len,),
+        )
+        buffer = np.empty((chunk_len,), dtype=dtype)
+        buf_pos = 0
+        written = 0
+        last_report = 0
+
+        for bump in bumps:
+            buffer[buf_pos] = (
+                bump.x0,
+                bump.y0,
+                bump.z0,
+                bump.x1,
+                bump.y1,
+                bump.z1,
+                bump.D,
+                bump.group,
+            )
+            half_d = bump.D / 2.0
+            x_min = min(bump.x0, bump.x1) - half_d
+            x_max = max(bump.x0, bump.x1) + half_d
+            y_min = min(bump.y0, bump.y1) - half_d
+            y_max = max(bump.y0, bump.y1) + half_d
+            z_min = min(bump.z0, bump.z1)
+            z_max = max(bump.z0, bump.z1)
+            if x_min < bbox_min[0]:
+                bbox_min[0] = x_min
+            if y_min < bbox_min[1]:
+                bbox_min[1] = y_min
+            if z_min < bbox_min[2]:
+                bbox_min[2] = z_min
+            if x_max > bbox_max[0]:
+                bbox_max[0] = x_max
+            if y_max > bbox_max[1]:
+                bbox_max[1] = y_max
+            if z_max > bbox_max[2]:
+                bbox_max[2] = z_max
+
+            group_entry = group_bbox.get(bump.group)
+            if group_entry is None:
+                group_entry = ([float('inf'), float('inf'), float('inf')], [float('-inf'), float('-inf'), float('-inf')])
+                group_bbox[bump.group] = group_entry
+            g_min, g_max = group_entry
+            if x_min < g_min[0]:
+                g_min[0] = x_min
+            if y_min < g_min[1]:
+                g_min[1] = y_min
+            if z_min < g_min[2]:
+                g_min[2] = z_min
+            if x_max > g_max[0]:
+                g_max[0] = x_max
+            if y_max > g_max[1]:
+                g_max[1] = y_max
+            if z_max > g_max[2]:
+                g_max[2] = z_max
+
+            buf_pos += 1
+            if buf_pos == chunk_len:
+                dset[written:written + buf_pos] = buffer
+                written += buf_pos
+                buf_pos = 0
+                if progress_interval and written - last_report >= progress_interval:
+                    last_report = written
+                    pct = written / total * 100
+                    _emit_log(log_callback, f"... {written}/{total} ({pct:.1f}%)", flush=True)
+
+        if buf_pos:
+            dset[written:written + buf_pos] = buffer[:buf_pos]
+            written += buf_pos
+            if progress_interval and written - last_report >= progress_interval:
+                last_report = written
+                pct = written / total * 100
+                _emit_log(log_callback, f"... {written}/{total} ({pct:.1f}%)", flush=True)
+
+        if written:
             bbox_array = np.array([bbox_min, bbox_max], dtype=np.float64)
             dset.attrs['bounding_box'] = bbox_array
             groups_root = handle.create_group('groups')
             for group_id, (g_min, g_max) in sorted(group_bbox.items()):
                 group_node = groups_root.create_group(str(group_id))
                 group_node.attrs['bounding_box'] = np.array([g_min, g_max], dtype=np.float64)
-    print(f"📦 Successfully saved {len(bumps)} vbumps to {filepath}.")
+
+    if progress_interval and written != last_report:
+        pct = written / total * 100
+        _emit_log(log_callback, f"... {written}/{total} ({pct:.1f}%)", flush=True)
+    _emit_log(log_callback, f"📦 Successfully saved {total} vbumps to {filepath}.")
 
 
 def _normalize_group_id(raw: int | str) -> int:
