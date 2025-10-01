@@ -2,7 +2,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QLineEdit, QLabel, QFileDialog, QTextEdit, QCheckBox, QMessageBox, QGroupBox
 )
-from PySide6.QtCore import Qt, QThread, QObject, Signal, Slot
+from PySide6.QtCore import QThread
 from PySide6.QtGui import QTextCursor
 from typing import List, Tuple
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -10,24 +10,14 @@ from matplotlib.figure import Figure
 import main
 import h5py
 
-
-class HDF5StreamWorker(QObject):
-    progress = Signal(str)
-    finished = Signal(int, str, list)
-    error = Signal(str)
-
-    def __init__(self, task, parent=None):
-        super().__init__(parent)
-        self._task = task
-
-    @Slot()
-    def run(self):
-        try:
-            written, path, markers = self._task(self.progress.emit)
-            self.finished.emit(written, path, markers)
-        except Exception as exc:
-            self.error.emit(str(exc))
-
+from ui.dialogs import (
+    request_count_parameters,
+    request_modify_value,
+    request_move_parameters,
+    request_pitch_parameters,
+    request_substrate_box,
+)
+from ui.streaming import HDF5StreamWorker
 
 class VBumpUI(QMainWindow):
     def __init__(self):
@@ -149,20 +139,6 @@ class VBumpUI(QMainWindow):
         self.log("🐢 Virtual Bump Generator (GUI mode) started.")
 
     # === 工具函式 ===
-    def _pair(self, edits):
-        box = QWidget(self)
-        layout = QHBoxLayout(box)
-        for e in edits:
-            layout.addWidget(e)
-        return box
-
-    def _triple(self, edits):
-        box = QWidget(self)
-        layout = QHBoxLayout(box)
-        for e in edits:
-            layout.addWidget(e)
-        return box
-
     def log(self, text):
         self.log_view.append(text)
         self.log_view.moveCursor(QTextCursor.End)
@@ -312,299 +288,185 @@ class VBumpUI(QMainWindow):
 
     # === 建立矩形 ===
     def create_pitch(self):
-        from PySide6.QtWidgets import QDialog
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Create Bumps by Pitch")
-        layout = QFormLayout(dlg)
+        dialog_result = request_pitch_parameters(self)
+        if not dialog_result:
+            return
 
-        p0_edits = [QLineEdit(), QLineEdit()]
-        p1_edits = [QLineEdit(), QLineEdit()]
-        x_pitch_edit = QLineEdit()
-        y_pitch_edit = QLineEdit()
-        dia_edit = QLineEdit()
-        group_edit = QLineEdit()
-        z_edit = QLineEdit()
-        h_edit = QLineEdit()
+        p0 = dialog_result.p0
+        p1 = dialog_result.p1
+        x_pitch = dialog_result.x_pitch
+        y_pitch = dialog_result.y_pitch
+        dia = dialog_result.diameter
+        group = dialog_result.group
+        z = dialog_result.z
+        h = dialog_result.h
 
-        layout.addRow("Lower corner (x0, y0):", self._pair(p0_edits))
-        layout.addRow("Upper corner (x1, y1):", self._pair(p1_edits))
-        layout.addRow("X pitch:", x_pitch_edit)
-        layout.addRow("Y pitch:", y_pitch_edit)
-        layout.addRow("Diameter:", dia_edit)
-        layout.addRow("Group:", group_edit)
-        layout.addRow("Base Z:", z_edit)
-        layout.addRow("Height:", h_edit)
-
-        btn_ok = QPushButton("OK")
-        btn_cancel = QPushButton("Cancel")
-        btn_box = QHBoxLayout()
-        btn_box.addWidget(btn_ok)
-        btn_box.addWidget(btn_cancel)
-        layout.addRow(btn_box)
-
-        def on_ok():
-            try:
-                p0 = (float(p0_edits[0].text()), float(p0_edits[1].text()))
-                p1 = (float(p1_edits[0].text()), float(p1_edits[1].text()))
-                x_pitch = float(x_pitch_edit.text())
-                y_pitch = float(y_pitch_edit.text())
-                dia = float(dia_edit.text())
-                group = int(group_edit.text()) if group_edit.text() else 1
-                z = float(z_edit.text())
-                h = float(h_edit.text())
-            except ValueError:
-                QMessageBox.warning(self, "Warning", "Invalid input values.")
-                return
-
-            estimated = main.estimate_rectangular_area_XY_by_pitch_count(p0, p1, x_pitch, y_pitch)
-            try:
-                if estimated >= main.LARGE_VBUMP_THRESHOLD:
-                    QMessageBox.information(
-                        self,
-                        "Large Dataset",
-                        (
-                            f"The requested grid would generate {estimated:,} vbumps, which exceeds the in-memory limit "
-                            f"({main.LARGE_VBUMP_THRESHOLD:,}). The full dataset will be written to an HDF5 file."
-                            " Only two bounding-box markers will remain in memory."
-                        ),
-                    )
-                    path, _ = QFileDialog.getSaveFileName(
-                        self,
-                        "Save HDF5",
-                        "",
-                        "HDF5 Files (*.h5 *.hdf5)",
-                    )
-                    if not path:
-                        self.log("⚠️ Large dataset generation cancelled (no file selected).")
-                        return
-
-                    def task(log_emit):
-                        written = main.create_rectangular_area_XY_by_pitch_to_hdf5(
-                            path,
-                            p0,
-                            p1,
-                            x_pitch,
-                            y_pitch,
-                            dia,
-                            group,
-                            z,
-                            h,
-                            log_callback=log_emit,
-                        )
-                        markers = main.bounding_box_vbumps_for_rectangular_area(p0, p1, z, h, dia, group)
-                        return written, path, markers
-
-                    self.log(
-                        f"🚀 Streaming {estimated:,} bumps to {path}. Live progress will appear below."
-                    )
-                    self._start_stream_worker(task, dialog=dlg)
+        estimated = main.estimate_rectangular_area_XY_by_pitch_count(p0, p1, x_pitch, y_pitch)
+        try:
+            if estimated >= main.LARGE_VBUMP_THRESHOLD:
+                QMessageBox.information(
+                    self,
+                    "Large Dataset",
+                    (
+                        f"The requested grid would generate {estimated:,} vbumps, which exceeds the in-memory limit "
+                        f"({main.LARGE_VBUMP_THRESHOLD:,}). The full dataset will be written to an HDF5 file."
+                        " Only two bounding-box markers will remain in memory."
+                    ),
+                )
+                path, _ = QFileDialog.getSaveFileName(
+                    self,
+                    "Save HDF5",
+                    "",
+                    "HDF5 Files (*.h5 *.hdf5)",
+                )
+                if not path:
+                    self.log("⚠️ Large dataset generation cancelled (no file selected).")
                     return
-                else:
-                    new_vbumps = main.create_rectangular_area_XY_by_pitch(p0, p1, x_pitch, y_pitch, dia, group, z, h)
-                    self.log(f"📐 Created {len(new_vbumps)} bumps by pitch")
-            except Exception as exc:
-                QMessageBox.critical(self, "Error", str(exc))
+
+                def task(log_emit):
+                    written = main.create_rectangular_area_XY_by_pitch_to_hdf5(
+                        path,
+                        p0,
+                        p1,
+                        x_pitch,
+                        y_pitch,
+                        dia,
+                        group,
+                        z,
+                        h,
+                        log_callback=log_emit,
+                    )
+                    markers = main.bounding_box_vbumps_for_rectangular_area(p0, p1, z, h, dia, group)
+                    return written, path, markers
+
+                self.log(
+                    f"🚀 Streaming {estimated:,} bumps to {path}. Live progress will appear below."
+                )
+                self._start_stream_worker(task)
                 return
 
-            self.current_vbumps.extend(new_vbumps)
-            dlg.accept()
-            if self.substrate_p0 and self.substrate_p1:
-                self.plot_aabb()
-        btn_ok.clicked.connect(on_ok)
-        btn_cancel.clicked.connect(dlg.reject)
-        dlg.exec()
+            new_vbumps = main.create_rectangular_area_XY_by_pitch(p0, p1, x_pitch, y_pitch, dia, group, z, h)
+            self.log(f"📐 Created {len(new_vbumps)} bumps by pitch")
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", str(exc))
+            return
+
+        self.current_vbumps.extend(new_vbumps)
+        if self.substrate_p0 and self.substrate_p1:
+            self.plot_aabb()
 
     def create_count(self):
-        from PySide6.QtWidgets import QDialog
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Create Bumps by Count")
-        layout = QFormLayout(dlg)
+        dialog_result = request_count_parameters(self)
+        if not dialog_result:
+            return
 
-        p0_edits = [QLineEdit(), QLineEdit()]
-        p1_edits = [QLineEdit(), QLineEdit()]
-        x_num_edit = QLineEdit()
-        y_num_edit = QLineEdit()
-        dia_edit = QLineEdit()
-        group_edit = QLineEdit()
-        z_edit = QLineEdit()
-        h_edit = QLineEdit()
+        p0 = dialog_result.p0
+        p1 = dialog_result.p1
+        x_num = dialog_result.x_count
+        y_num = dialog_result.y_count
+        dia = dialog_result.diameter
+        group = dialog_result.group
+        z = dialog_result.z
+        h = dialog_result.h
 
-        layout.addRow("Lower corner (x0, y0):", self._pair(p0_edits))
-        layout.addRow("Upper corner (x1, y1):", self._pair(p1_edits))
-        layout.addRow("X count:", x_num_edit)
-        layout.addRow("Y count:", y_num_edit)
-        layout.addRow("Diameter:", dia_edit)
-        layout.addRow("Group:", group_edit)
-        layout.addRow("Base Z:", z_edit)
-        layout.addRow("Height:", h_edit)
-
-        btn_ok = QPushButton("OK")
-        btn_cancel = QPushButton("Cancel")
-        btn_box = QHBoxLayout()
-        btn_box.addWidget(btn_ok)
-        btn_box.addWidget(btn_cancel)
-        layout.addRow(btn_box)
-
-        def on_ok():
-            try:
-                p0 = (float(p0_edits[0].text()), float(p0_edits[1].text()))
-                p1 = (float(p1_edits[0].text()), float(p1_edits[1].text()))
-                x_num = int(x_num_edit.text())
-                y_num = int(y_num_edit.text())
-                dia = float(dia_edit.text())
-                group = int(group_edit.text()) if group_edit.text() else 1
-                z = float(z_edit.text())
-                h = float(h_edit.text())
-            except ValueError:
-                QMessageBox.warning(self, "Warning", "Invalid input values.")
-                return
-
-            estimated = main.estimate_rectangular_area_XY_by_number_count(x_num, y_num)
-            try:
-                if estimated >= main.LARGE_VBUMP_THRESHOLD:
-                    QMessageBox.information(
-                        self,
-                        "Large Dataset",
-                        (
-                            f"The requested grid would generate {estimated:,} vbumps, which exceeds the in-memory limit "
-                            f"({main.LARGE_VBUMP_THRESHOLD:,}). The full dataset will be written to an HDF5 file."
-                            " Only two bounding-box markers will remain in memory."
-                        ),
-                    )
-                    path, _ = QFileDialog.getSaveFileName(
-                        self,
-                        "Save HDF5",
-                        "",
-                        "HDF5 Files (*.h5 *.hdf5)",
-                    )
-                    if not path:
-                        self.log("⚠️ Large dataset generation cancelled (no file selected).")
-                        return
-
-                    def task(log_emit):
-                        new_p0, new_p1, x_pitch, y_pitch = main.normalize_rectangular_area_from_counts(
-                            p0, p1, x_num, y_num
-                        )
-                        written = main.create_rectangular_area_XY_by_number_to_hdf5(
-                            path,
-                            p0,
-                            p1,
-                            x_num,
-                            y_num,
-                            dia,
-                            group,
-                            z,
-                            h,
-                            log_callback=log_emit,
-                        )
-                        markers = main.bounding_box_vbumps_for_rectangular_area(new_p0, new_p1, z, h, dia, group)
-                        return written, path, markers
-
-                    self.log(
-                        f"🚀 Streaming {estimated:,} bumps to {path}. Live progress will appear below."
-                    )
-                    self._start_stream_worker(task, dialog=dlg)
+        estimated = main.estimate_rectangular_area_XY_by_number_count(x_num, y_num)
+        try:
+            if estimated >= main.LARGE_VBUMP_THRESHOLD:
+                QMessageBox.information(
+                    self,
+                    "Large Dataset",
+                    (
+                        f"The requested grid would generate {estimated:,} vbumps, which exceeds the in-memory limit "
+                        f"({main.LARGE_VBUMP_THRESHOLD:,}). The full dataset will be written to an HDF5 file."
+                        " Only two bounding-box markers will remain in memory."
+                    ),
+                )
+                path, _ = QFileDialog.getSaveFileName(
+                    self,
+                    "Save HDF5",
+                    "",
+                    "HDF5 Files (*.h5 *.hdf5)",
+                )
+                if not path:
+                    self.log("⚠️ Large dataset generation cancelled (no file selected).")
                     return
-                else:
-                    new_vbumps = main.create_rectangular_area_XY_by_number(p0, p1, x_num, y_num, dia, group, z, h)
-                    self.log(f"📏 Created {len(new_vbumps)} bumps by count")
-            except Exception as exc:
-                QMessageBox.critical(self, "Error", str(exc))
+
+                def task(log_emit):
+                    new_p0, new_p1, x_pitch, y_pitch = main.normalize_rectangular_area_from_counts(
+                        p0, p1, x_num, y_num
+                    )
+                    written = main.create_rectangular_area_XY_by_number_to_hdf5(
+                        path,
+                        p0,
+                        p1,
+                        x_num,
+                        y_num,
+                        dia,
+                        group,
+                        z,
+                        h,
+                        log_callback=log_emit,
+                    )
+                    markers = main.bounding_box_vbumps_for_rectangular_area(new_p0, new_p1, z, h, dia, group)
+                    return written, path, markers
+
+                self.log(
+                    f"🚀 Streaming {estimated:,} bumps to {path}. Live progress will appear below."
+                )
+                self._start_stream_worker(task)
                 return
 
-            self.current_vbumps.extend(new_vbumps)
-            dlg.accept()
-            if self.substrate_p0 and self.substrate_p1:
-                self.plot_aabb()
-        btn_ok.clicked.connect(on_ok)
-        btn_cancel.clicked.connect(dlg.reject)
-        dlg.exec()
+            new_vbumps = main.create_rectangular_area_XY_by_number(p0, p1, x_num, y_num, dia, group, z, h)
+            self.log(f"📏 Created {len(new_vbumps)} bumps by count")
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", str(exc))
+            return
+
+        self.current_vbumps.extend(new_vbumps)
+        if self.substrate_p0 and self.substrate_p1:
+            self.plot_aabb()
 
     # === 修改與移動 ===
     def modify_diameter(self):
         if not self.current_vbumps:
             QMessageBox.warning(self, "Warning", "No bumps loaded.")
             return
+        dialog_result = request_modify_value(self, "Modify Diameter", "New Diameter:")
+        if not dialog_result:
+            return
 
-        from PySide6.QtWidgets import QDialog
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Modify Diameter")
-        layout = QFormLayout(dlg)
-
-        group_edit = QLineEdit()
-        new_diam_edit = QLineEdit()
-        layout.addRow("Group Filter (optional):", group_edit)
-        layout.addRow("New Diameter:", new_diam_edit)
-
-        btn_ok = QPushButton("OK")
-        btn_cancel = QPushButton("Cancel")
-        btn_box = QHBoxLayout()
-        btn_box.addWidget(btn_ok)
-        btn_box.addWidget(btn_cancel)
-        layout.addRow(btn_box)
-
-        def on_ok():
-            try:
-                gid = int(group_edit.text()) if group_edit.text() else None
-                new_d = float(new_diam_edit.text())
-                selected = [b for b in self.current_vbumps if gid is None or b.group == gid]
-                main.modify_diameter(selected, new_d)
-                self.log(f"🔧 Updated diameter to {new_d} for {len(selected)} bumps")
-                dlg.accept()
-            except Exception:
-                QMessageBox.warning(self, "Warning", "Invalid input values.")
-        btn_ok.clicked.connect(on_ok)
-        btn_cancel.clicked.connect(dlg.reject)
-        dlg.exec()
+        gid = dialog_result.group_filter
+        new_d = dialog_result.new_value
+        selected = [b for b in self.current_vbumps if gid is None or b.group == gid]
+        main.modify_diameter(selected, new_d)
+        self.log(f"🔧 Updated diameter to {new_d} for {len(selected)} bumps")
 
     def modify_height(self):
         if not self.current_vbumps:
             QMessageBox.warning(self, "Warning", "No bumps loaded.")
             return
 
-        from PySide6.QtWidgets import QDialog
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Modify Height")
-        layout = QFormLayout(dlg)
+        dialog_result = request_modify_value(self, "Modify Height", "New Height:")
+        if not dialog_result:
+            return
 
-        group_edit = QLineEdit()
-        new_height_edit = QLineEdit()
-        layout.addRow("Group Filter (optional):", group_edit)
-        layout.addRow("New Height:", new_height_edit)
-
-        btn_ok = QPushButton("OK")
-        btn_cancel = QPushButton("Cancel")
-        btn_box = QHBoxLayout()
-        btn_box.addWidget(btn_ok)
-        btn_box.addWidget(btn_cancel)
-        layout.addRow(btn_box)
-
-        def on_ok():
-            try:
-                gid = int(group_edit.text()) if group_edit.text() else None
-                new_h = float(new_height_edit.text())
-                selected = [b for b in self.current_vbumps if gid is None or b.group == gid]
-                if not selected:
-                    QMessageBox.information(self, "Info", "No bumps matched the filter.")
-                    return
-                main.modify_height(selected, new_h)
-                self.log(f"📐 Updated height to {new_h} for {len(selected)} bumps")
-                if self.substrate_p0 and self.substrate_p1:
-                    self.plot_aabb()
-                dlg.accept()
-            except Exception:
-                QMessageBox.warning(self, "Warning", "Invalid input values.")
-
-        btn_ok.clicked.connect(on_ok)
-        btn_cancel.clicked.connect(dlg.reject)
-        dlg.exec()
+        gid = dialog_result.group_filter
+        new_h = dialog_result.new_value
+        selected = [b for b in self.current_vbumps if gid is None or b.group == gid]
+        if not selected:
+            QMessageBox.information(self, "Info", "No bumps matched the filter.")
+            return
+        main.modify_height(selected, new_h)
+        self.log(f"📐 Updated height to {new_h} for {len(selected)} bumps")
+        if self.substrate_p0 and self.substrate_p1:
+            self.plot_aabb()
 
     def delete_group(self):
         if not self.current_vbumps:
             QMessageBox.warning(self, "Warning", "No bumps loaded.")
             return
         from PySide6.QtWidgets import QInputDialog
-        gid, ok = QInputDialog.getInt(self, "Delete Group", "Enter group ID to delete:", 1, 1, 9999)
+        gid, ok = QInputDialog.getInt(self, "Delete Group", "Enter group ID to delete:", 0, 1, 9999)
         if not ok:
             return
         before = len(self.current_vbumps)
@@ -620,83 +482,58 @@ class VBumpUI(QMainWindow):
             QMessageBox.warning(self, "Warning", "No bumps loaded.")
             return
 
-        from PySide6.QtWidgets import QDialog
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Move / Copy Bumps")
-        layout = QFormLayout(dlg)
+        dialog_result = request_move_parameters(self)
+        if not dialog_result:
+            return
 
-        group_edit = QLineEdit()
-        ref_xyz = [QLineEdit(), QLineEdit(), QLineEdit()]
-        new_xyz = [QLineEdit(), QLineEdit(), QLineEdit()]
-        keep_check = QCheckBox("Keep Original (Copy)")
-        new_group_edit = QLineEdit()
-        new_diam_edit = QLineEdit()
+        gid = dialog_result.group_filter
+        selected = [b for b in self.current_vbumps if gid is None or b.group == gid]
+        if not selected:
+            QMessageBox.information(self, "Info", "No bumps matched the filter.")
+            return
 
-        layout.addRow("Group Filter (optional):", group_edit)
-        layout.addRow("Reference Point (x,y,z):", self._triple(ref_xyz))
-        layout.addRow("Target Point (x,y,z):", self._triple(new_xyz))
-        layout.addRow(keep_check)
-        layout.addRow("New Group (copy):", new_group_edit)
-        layout.addRow("New Diameter (copy):", new_diam_edit)
+        keep = dialog_result.keep_original
+        new_g = dialog_result.new_group
+        new_d = dialog_result.new_diameter
 
-        btn_ok = QPushButton("OK")
-        btn_cancel = QPushButton("Cancel")
-        btn_box = QHBoxLayout()
-        btn_box.addWidget(btn_ok)
-        btn_box.addWidget(btn_cancel)
-        layout.addRow(btn_box)
+        auto_group_map = {}
+        if keep and gid is None and new_g is None:
+            existing_groups = [b.group for b in self.current_vbumps if isinstance(b.group, int)]
+            max_group = max(existing_groups) if existing_groups else 0
+            for b in selected:
+                g = b.group
+                if g not in auto_group_map:
+                    max_group += 1
+                    auto_group_map[g] = max_group
 
-        def on_ok():
-            try:
-                ref = tuple(float(e.text()) for e in ref_xyz)
-                newp = tuple(float(e.text()) for e in new_xyz)
-                gid = int(group_edit.text()) if group_edit.text() else None
-                keep = keep_check.isChecked()
-                new_d = float(new_diam_edit.text()) if new_diam_edit.text() else None
-                new_g = int(new_group_edit.text()) if new_group_edit.text() else None
-                selected = [b for b in self.current_vbumps if gid is None or b.group == gid]
-                if not selected:
-                    QMessageBox.information(self, "Info", "No bumps matched the filter.")
-                    return
+        moved = main.move_vbumps(
+            selected,
+            dialog_result.reference,
+            dialog_result.target,
+            new_g,
+            new_d,
+            keep,
+        )
+        copies = moved[len(selected):] if keep else moved
 
-                auto_group_map = {}
-                if keep and gid is None and new_g is None:
-                    existing_groups = [b.group for b in self.current_vbumps if isinstance(b.group, int)]
-                    max_group = max(existing_groups) if existing_groups else 0
-                    for b in selected:
-                        g = b.group
-                        if g not in auto_group_map:
-                            max_group += 1
-                            auto_group_map[g] = max_group
+        if auto_group_map:
+            for original, clone in zip(selected, copies):
+                clone.group = auto_group_map.get(original.group, clone.group)
 
-                moved = main.move_vbumps(selected, ref, newp, new_g, new_d, keep)
-                copies = moved[len(selected):] if keep else moved
+        if gid is not None and not keep:
+            self.current_vbumps = [b for b in self.current_vbumps if b.group != gid] + moved
+        elif gid is None and not keep:
+            self.current_vbumps = [b for b in self.current_vbumps if b not in selected] + moved
+        else:
+            self.current_vbumps.extend(copies)
 
-                if auto_group_map:
-                    for original, clone in zip(selected, copies):
-                        clone.group = auto_group_map.get(original.group, clone.group)
-
-                if gid is not None and not keep:
-                    self.current_vbumps = [b for b in self.current_vbumps if b.group != gid] + moved
-                elif gid is None and not keep:
-                    self.current_vbumps = [b for b in self.current_vbumps if b not in selected] + moved
-                else:
-                    self.current_vbumps.extend(copies)
-
-                if auto_group_map:
-                    assigned = ", ".join(str(v) for v in sorted(auto_group_map.values()))
-                    self.log(f"📤 Duplicated {len(selected)} bumps with new groups {assigned}")
-                else:
-                    self.log(f"📤 Moved/duplicated {len(selected)} bumps")
-                # 新增: 若 substrate_p0 和 substrate_p1 已設，則繪圖
-                if self.substrate_p0 and self.substrate_p1:
-                    self.plot_aabb()
-                dlg.accept()
-            except Exception:
-                QMessageBox.warning(self, "Warning", "Invalid input values.")
-        btn_ok.clicked.connect(on_ok)
-        btn_cancel.clicked.connect(dlg.reject)
-        dlg.exec()
+        if auto_group_map:
+            assigned = ", ".join(str(v) for v in sorted(auto_group_map.values()))
+            self.log(f"📤 Duplicated {len(selected)} bumps with new groups {assigned}")
+        else:
+            self.log(f"📤 Moved/duplicated {len(selected)} bumps")
+        if self.substrate_p0 and self.substrate_p1:
+            self.plot_aabb()
 
     # === 匯出 / 繪圖 ===
     def export_weldline(self):
@@ -742,40 +579,13 @@ class VBumpUI(QMainWindow):
         self.log("📊 AABB plotted.")
 
     def set_substrate_box(self):
-    # 彈出一個對話框，讓使用者輸入座標
-        from PySide6.QtWidgets import QDialog
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Set Substrate Box Coordinates")
-        layout = QFormLayout(dlg)
+        dialog_result = request_substrate_box(self)
+        if not dialog_result:
+            return
 
-        p0_edits = [QLineEdit(), QLineEdit(), QLineEdit()]
-        p1_edits = [QLineEdit(), QLineEdit(), QLineEdit()]
-        layout.addRow("Lower corner (x0, y0, z0):", self._triple(p0_edits))
-        layout.addRow("Upper corner (x1, y1, z1):", self._triple(p1_edits))
-
-        btn_ok = QPushButton("OK")
-        btn_cancel = QPushButton("Cancel")
-        btn_box = QHBoxLayout()
-        btn_box.addWidget(btn_ok)
-        btn_box.addWidget(btn_cancel)
-        layout.addRow(btn_box)
-
-        def on_ok():
-            try:
-                p0 = tuple(float(e.text()) for e in p0_edits)
-                p1 = tuple(float(e.text()) for e in p1_edits)
-                if len(p0) != 3 or len(p1) != 3:
-                    raise ValueError
-                self.substrate_p0 = p0
-                self.substrate_p1 = p1
-                self.log(f"🧱 Substrate box set to {p0} - {p1}")
-                dlg.accept()
-            except Exception:
-                QMessageBox.warning(self, "Warning", "Invalid input values.")
-
-        btn_ok.clicked.connect(on_ok)
-        btn_cancel.clicked.connect(dlg.reject)
-        dlg.exec()
+        self.substrate_p0 = dialog_result.p0
+        self.substrate_p1 = dialog_result.p1
+        self.log(f"🧱 Substrate box set to {dialog_result.p0} - {dialog_result.p1}")
 
 
 if __name__ == "__main__":
