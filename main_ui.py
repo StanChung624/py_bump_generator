@@ -69,10 +69,12 @@ class VBumpUI(QMainWindow):
         mod_box = QGroupBox("🔧 Modify / Move")
         mlayout = QFormLayout(mod_box)
         self.btn_modify_diam = QPushButton("Modify Diameter")
+        self.btn_modify_height = QPushButton("Modify Height")
         self.btn_move = QPushButton("Move / Copy Bumps")
         self.btn_delete_group = QPushButton("Delete Group")
         btn_row = QHBoxLayout()
         btn_row.addWidget(self.btn_modify_diam)
+        btn_row.addWidget(self.btn_modify_height)
         btn_row.addWidget(self.btn_move)
         btn_row.addWidget(self.btn_delete_group)
         mlayout.addRow(btn_row)
@@ -136,6 +138,7 @@ class VBumpUI(QMainWindow):
         self.btn_create_pitch.clicked.connect(self.create_pitch)
         self.btn_create_count.clicked.connect(self.create_count)
         self.btn_modify_diam.clicked.connect(self.modify_diameter)
+        self.btn_modify_height.clicked.connect(self.modify_height)
         self.btn_move.clicked.connect(self.move_bumps)
         self.btn_delete_group.clicked.connect(self.delete_group)
         self.btn_weldline.clicked.connect(self.export_weldline)
@@ -554,6 +557,48 @@ class VBumpUI(QMainWindow):
         btn_cancel.clicked.connect(dlg.reject)
         dlg.exec()
 
+    def modify_height(self):
+        if not self.current_vbumps:
+            QMessageBox.warning(self, "Warning", "No bumps loaded.")
+            return
+
+        from PySide6.QtWidgets import QDialog
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Modify Height")
+        layout = QFormLayout(dlg)
+
+        group_edit = QLineEdit()
+        new_height_edit = QLineEdit()
+        layout.addRow("Group Filter (optional):", group_edit)
+        layout.addRow("New Height:", new_height_edit)
+
+        btn_ok = QPushButton("OK")
+        btn_cancel = QPushButton("Cancel")
+        btn_box = QHBoxLayout()
+        btn_box.addWidget(btn_ok)
+        btn_box.addWidget(btn_cancel)
+        layout.addRow(btn_box)
+
+        def on_ok():
+            try:
+                gid = int(group_edit.text()) if group_edit.text() else None
+                new_h = float(new_height_edit.text())
+                selected = [b for b in self.current_vbumps if gid is None or b.group == gid]
+                if not selected:
+                    QMessageBox.information(self, "Info", "No bumps matched the filter.")
+                    return
+                main.modify_height(selected, new_h)
+                self.log(f"📐 Updated height to {new_h} for {len(selected)} bumps")
+                if self.substrate_p0 and self.substrate_p1:
+                    self.plot_aabb()
+                dlg.accept()
+            except Exception:
+                QMessageBox.warning(self, "Warning", "Invalid input values.")
+
+        btn_ok.clicked.connect(on_ok)
+        btn_cancel.clicked.connect(dlg.reject)
+        dlg.exec()
+
     def delete_group(self):
         if not self.current_vbumps:
             QMessageBox.warning(self, "Warning", "No bumps loaded.")
@@ -661,9 +706,13 @@ class VBumpUI(QMainWindow):
                 return
         # 清空舊圖
         self.figure.clear()
-        ax = self.figure.add_subplot(111, projection='3d')
+
         # 傳入 ax 給 main 模組繪圖
-        main.plot_vbumps_aabb(self.current_vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
+        ax = self.figure.add_subplot(111, projection='3d')
+        if len(self.current_vbumps) < 9000:
+            main.plot_vbumps(self.current_vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
+        else:
+            main.plot_vbumps_aabb(self.current_vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
         self.canvas.draw()
         self.log("📊 AABB plotted.")
 

@@ -22,7 +22,7 @@ from vbumps2WDL import (
     plot_vbumps,
     plot_vbumps_aabb
 )
-from vbumpsManipulation import modify_diameter, move_vbumps
+from vbumpsManipulation import modify_diameter, modify_height, move_vbumps
 
 GREEN = "\033[92m"
 RESET = "\033[0m"
