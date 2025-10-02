@@ -304,7 +304,12 @@ def request_move_parameters(parent) -> Optional[MoveDialogResult]:
     return None
 
 
-def request_substrate_box(parent) -> Optional[SubstrateDialogResult]:
+def request_substrate_box(
+    parent,
+    *,
+    initial: Optional[tuple[tuple[float, float, float], tuple[float, float, float]]] = None,
+    auto_bounds: Optional[tuple[tuple[float, float, float], tuple[float, float, float]]] = None,
+) -> Optional[SubstrateDialogResult]:
     dlg = QDialog(parent)
     dlg.setWindowTitle("Set Substrate Box Coordinates")
     layout = QFormLayout(dlg)
@@ -314,9 +319,22 @@ def request_substrate_box(parent) -> Optional[SubstrateDialogResult]:
     layout.addRow("Lower corner (x0, y0, z0):", _triple(dlg, p0_edits))
     layout.addRow("Upper corner (x1, y1, z1):", _triple(dlg, p1_edits))
 
+    def _populate_fields(values: tuple[tuple[float, float, float], tuple[float, float, float]]) -> None:
+        (min_corner, max_corner) = values
+        for edit, value in zip(p0_edits, min_corner):
+            edit.setText(f"{value:g}")
+        for edit, value in zip(p1_edits, max_corner):
+            edit.setText(f"{value:g}")
+
+    if initial is not None:
+        _populate_fields(initial)
+
     btn_ok = QPushButton("OK")
     btn_cancel = QPushButton("Cancel")
+    btn_auto = QPushButton("Auto")
+    btn_auto.setEnabled(auto_bounds is not None)
     btn_box = QHBoxLayout()
+    btn_box.addWidget(btn_auto)
     btn_box.addWidget(btn_ok)
     btn_box.addWidget(btn_cancel)
     layout.addRow(btn_box)
@@ -337,6 +355,13 @@ def request_substrate_box(parent) -> Optional[SubstrateDialogResult]:
         result = SubstrateDialogResult(p0, p1)
         dlg.accept()
 
+    def on_auto():
+        if auto_bounds is None:
+            QMessageBox.information(parent, "Info", "No vbumps available to compute bounding box.")
+            return
+        _populate_fields(auto_bounds)
+
+    btn_auto.clicked.connect(on_auto)
     btn_ok.clicked.connect(on_ok)
     btn_cancel.clicked.connect(dlg.reject)
 

@@ -670,7 +670,22 @@ class VBumpUI(QMainWindow):
         self.log("📊 AABB plotted.")
 
     def set_substrate_box(self):
-        dialog_result = request_substrate_box(self)
+        auto_bounds = None
+        if self.current_vbumps:
+            min_pt, max_pt = self._compute_bounding_box(self.current_vbumps)
+            max_x, max_y, max_z = max_pt
+            max_z *= -1 #set under vbumps and twice as height of vbump
+            auto_bounds = (min_pt, (max_x, max_y, max_z))
+
+        initial = None
+        if self.substrate_p0 and self.substrate_p1:
+            initial = (self.substrate_p0, self.substrate_p1)
+
+        dialog_result = request_substrate_box(
+            self,
+            initial=initial,
+            auto_bounds=auto_bounds,
+        )
         if not dialog_result:
             return
 
