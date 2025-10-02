@@ -137,13 +137,16 @@ class VBumpCollection(list[VBump]):
         bounding_box: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None,
         group_bounding_boxes: dict[int | str, tuple[tuple[float, float, float], tuple[float, float, float]]] | None = None,
         source_count: int | None = None,
+        is_bounding_box_only:bool = False,
+        link_h5_filepath: str | None = None,
     ) -> None:
         super().__init__(bumps or ())
         self.bounding_box = bounding_box
         self.group_bounding_boxes = group_bounding_boxes or {}
         self.source_count = source_count if source_count is not None else len(self)
-        self.is_bounding_box_only = False
-
+        self.is_bounding_box_only = is_bounding_box_only
+        self.link_h5_filepath = link_h5_filepath
+    
 
 def to_csv(filepath, bumps: List[VBump]):
     with open(filepath, "w", encoding="utf-8", newline="") as f:
@@ -403,14 +406,18 @@ def load_hdf5(
             use_bounding_boxes = max_rows is not None and total_rows >= max_rows
         else:
             use_bounding_boxes = bool(only_bounding_boxes)
+        
+        
+        link_h5_filepath = filepath if use_bounding_boxes else None
 
         result = VBumpCollection(
             bounding_box=dataset_bbox,
             group_bounding_boxes=group_bounding_boxes,
             source_count=total_rows,
+            is_bounding_box_only=use_bounding_boxes,
+            link_h5_filepath=link_h5_filepath
         )
-        result.is_bounding_box_only = use_bounding_boxes
-
+        
         if use_bounding_boxes:
             markers: list[VBump] = []
             if group_bounding_boxes:

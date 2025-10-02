@@ -302,8 +302,17 @@ def main() -> None:
                 new_diameter = None
                 new_group = None
 
+            delta_u = tuple(t - r for t, r in zip(new_point, reference))
+                    
             # Only move/copy the selected bumps
-            result_bumps = move_vbumps(selected_bumps, reference, new_point, new_group, new_diameter, keep_origin)
+            result_bumps = move_vbumps(
+                selected_bumps,
+                delta_u,
+                new_group,
+                new_diameter,
+                keep_origin,
+                None,
+            )
 
             if filter_by_group and not keep_origin:
                 # Replace only the selected group in current_vbumps

@@ -1,8 +1,13 @@
-from typing import Callable, List
+from typing import Callable, List, Dict
 
 from VBump.Basic import VBump, _require_h5py, _require_numpy
 
-def make_move_func(dx, dy, dz, new_group_id:int=None, new_diameter:float=None, keep_original:bool=False):
+def make_move_func(dx, dy, dz, *,
+                   new_group:int|None=None,
+                   new_D:float|None=None,
+                   group_map:Dict[int,int]|None = None,
+                   keep_original:bool=False):
+    
     def move_and_duplicate(row):
         original = row.copy()
         moved = row.copy()
@@ -11,11 +16,15 @@ def make_move_func(dx, dy, dz, new_group_id:int=None, new_diameter:float=None, k
         moved['y0'] += dy
         moved['y1'] += dy
         moved['z0'] += dz
-        moved['z1'] += dz
-        if new_group_id:
-            moved['group'] = new_group_id
-        if new_diameter:
-            moved['diameter'] = new_diameter
+        moved['z1'] += dz        
+        if new_D is not None:
+            moved['diameter'] = new_D
+
+        if group_map and moved['group'] in group_map:
+            moved['group'] = group_map[moved['group']]
+        elif new_group is not None:
+            moved['group'] = new_group
+        
         if keep_original:
             return [original, moved]
         else:

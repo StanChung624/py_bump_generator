@@ -73,8 +73,7 @@ def plot_vbumps(
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
-    ax.set_title("Vbumps by group")
-
+    
     if handles:
         ax.set_position([0.07, 0.1, 0.6, 0.8])
         legend_ax = ax.figure.add_axes([0.72, 0.1, 0.25, 0.8])

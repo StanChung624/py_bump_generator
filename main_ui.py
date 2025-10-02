@@ -4,11 +4,13 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QThread
 from PySide6.QtGui import QTextCursor
-from typing import List, Tuple
+from typing import Tuple
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import main
 import h5py
+
+from VBump.Basic import VBumpCollection
 
 from ui.dialogs import (
     request_count_parameters,
@@ -26,8 +28,8 @@ class VBumpUI(QMainWindow):
         self.setMinimumSize(1000, 700)
 
         # 狀態變數
-        self.loaded_vbumps: List[main.VBump] = []
-        self.current_vbumps: List[main.VBump] = []
+        self.loaded_vbumps: VBumpCollection = VBumpCollection()
+        self.current_vbumps: VBumpCollection = VBumpCollection()
         self.substrate_p0: Tuple[float, float, float] | None = None
         self.substrate_p1: Tuple[float, float, float] | None = None
         self._stream_threads: list[QThread] = []
@@ -144,6 +146,80 @@ class VBumpUI(QMainWindow):
         self.log_view.moveCursor(QTextCursor.End)
         QApplication.processEvents()
 
+    def _ensure_collection(self, bumps) -> VBumpCollection:
+        if isinstance(bumps, VBumpCollection):
+            return bumps
+        return VBumpCollection(list(bumps))
+
+    def _clone_vbumps(self, bumps) -> list[main.VBump]:
+        return [main.VBump.from_other(b) for b in bumps]
+
+    def _collection_from(self, items, template: VBumpCollection | None = None, **overrides) -> VBumpCollection:
+        data = list(items)
+        if template is not None:
+            collection = VBumpCollection(
+                data,
+                bounding_box=template.bounding_box,
+                group_bounding_boxes=dict(template.group_bounding_boxes or {}),
+                source_count=template.source_count,
+                is_bounding_box_only=template.is_bounding_box_only,
+                link_h5_filepath=template.link_h5_filepath,
+            )
+        else:
+            collection = VBumpCollection(
+                data,
+                bounding_box=None,
+                group_bounding_boxes={},
+                source_count=len(data),
+                is_bounding_box_only=False,
+                link_h5_filepath=None,
+            )
+        for key, value in overrides.items():
+            setattr(collection, key, value)
+        return collection
+
+    def _mark_collection_modified(self, collection: VBumpCollection) -> None:
+        collection.bounding_box = None
+        collection.group_bounding_boxes = {}
+        collection.link_h5_filepath = None
+        collection.is_bounding_box_only = False
+        collection.source_count = len(collection)
+
+    def _append_to_current(
+        self,
+        bumps,
+        *,
+        metadata_template: VBumpCollection | None = None,
+        metadata_overrides: dict | None = None,
+    ) -> None:
+        source = self._ensure_collection(bumps)
+        clones = self._clone_vbumps(source)
+        template = metadata_template or source
+        if not self.current_vbumps:
+            self.current_vbumps = self._collection_from(clones, template)
+        else:
+            self.current_vbumps.extend(clones)
+            self._mark_collection_modified(self.current_vbumps)
+            return
+        if metadata_overrides:
+            for key, value in metadata_overrides.items():
+                setattr(self.current_vbumps, key, value)
+
+    def _compute_bounding_box(self, bumps) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
+        points_x: list[float] = []
+        points_y: list[float] = []
+        points_z: list[float] = []
+        for bump in bumps:
+            points_x.extend([bump.x0, bump.x1])
+            points_y.extend([bump.y0, bump.y1])
+            points_z.extend([bump.z0, bump.z1])
+        if not points_x:
+            return None
+        return (
+            (min(points_x), min(points_y), min(points_z)),
+            (max(points_x), max(points_y), max(points_z)),
+        )
+
     def f(self, edit: QLineEdit, default=None, cast=float):
         t = edit.text().strip()
         if not t:
@@ -169,7 +245,15 @@ class VBumpUI(QMainWindow):
 
     def _stream_finished(self, thread: QThread, worker: HDF5StreamWorker, written: int, path: str, markers: list[main.VBump]):
         if markers:
-            self.current_vbumps.extend(markers)
+            overrides = {
+                "source_count": written,
+                "is_bounding_box_only": True,
+                "link_h5_filepath": path,
+            }
+            bbox = self._compute_bounding_box(markers)
+            if bbox is not None:
+                overrides["bounding_box"] = bbox
+            self._append_to_current(markers, metadata_overrides=overrides)
             self.log(f"📏 Stored {len(markers)} bounding-box markers in memory after streaming {written:,} bumps from {path}.")
             if self.substrate_p0 and self.substrate_p1:
                 self.plot_aabb()
@@ -220,7 +304,6 @@ class VBumpUI(QMainWindow):
 
     # === 檔案操作 ===
     def load_csv(self):
-        import copy
         path, _ = QFileDialog.getOpenFileName(
                         self,
                         "Select File",
@@ -244,8 +327,10 @@ class VBumpUI(QMainWindow):
             else:
                 new_vbumps = main.load_csv(path)
                 self.log(f"✅ Loading csv format")
-            self.loaded_vbumps.extend(new_vbumps)
-            self.current_vbumps.extend(copy.deepcopy(new_vbumps))
+            new_collection = self._ensure_collection(new_vbumps)
+            self.loaded_vbumps.extend(new_collection)
+            self._mark_collection_modified(self.loaded_vbumps)
+            self._append_to_current(new_collection)
             self.log(f"✅ Loaded {len(new_vbumps)} bumps from {path} (total {len(self.loaded_vbumps)})")
             reply = QMessageBox.question(
                 self,
@@ -351,7 +436,7 @@ class VBumpUI(QMainWindow):
             QMessageBox.critical(self, "Error", str(exc))
             return
 
-        self.current_vbumps.extend(new_vbumps)
+        self._append_to_current(new_vbumps)
         if self.substrate_p0 and self.substrate_p1:
             self.plot_aabb()
 
@@ -422,7 +507,7 @@ class VBumpUI(QMainWindow):
             QMessageBox.critical(self, "Error", str(exc))
             return
 
-        self.current_vbumps.extend(new_vbumps)
+        self._append_to_current(new_vbumps)
         if self.substrate_p0 and self.substrate_p1:
             self.plot_aabb()
 
@@ -439,6 +524,7 @@ class VBumpUI(QMainWindow):
         new_d = dialog_result.new_value
         selected = [b for b in self.current_vbumps if gid is None or b.group == gid]
         main.modify_diameter(selected, new_d)
+        self._mark_collection_modified(self.current_vbumps)
         self.log(f"🔧 Updated diameter to {new_d} for {len(selected)} bumps")
 
     def modify_height(self):
@@ -457,6 +543,7 @@ class VBumpUI(QMainWindow):
             QMessageBox.information(self, "Info", "No bumps matched the filter.")
             return
         main.modify_height(selected, new_h)
+        self._mark_collection_modified(self.current_vbumps)
         self.log(f"📐 Updated height to {new_h} for {len(selected)} bumps")
         if self.substrate_p0 and self.substrate_p1:
             self.plot_aabb()
@@ -470,7 +557,9 @@ class VBumpUI(QMainWindow):
         if not ok:
             return
         before = len(self.current_vbumps)
-        self.current_vbumps = [b for b in self.current_vbumps if b.group != gid]
+        remaining = [b for b in self.current_vbumps if b.group != gid]
+        self.current_vbumps = self._collection_from(remaining)
+        self._mark_collection_modified(self.current_vbumps)
         after = len(self.current_vbumps)
         removed = before - after
         self.log(f"🗑️ Deleted group {gid} ({removed} bumps removed).")
@@ -506,26 +595,28 @@ class VBumpUI(QMainWindow):
                     max_group += 1
                     auto_group_map[g] = max_group
 
+        delta_u = tuple(t - r for t, r in zip(dialog_result.target, dialog_result.reference))
+
         moved = main.move_vbumps(
             selected,
-            dialog_result.reference,
-            dialog_result.target,
+            delta_u,
             new_g,
             new_d,
             keep,
+            auto_group_map if auto_group_map else None,
         )
         copies = moved[len(selected):] if keep else moved
 
-        if auto_group_map:
-            for original, clone in zip(selected, copies):
-                clone.group = auto_group_map.get(original.group, clone.group)
-
         if gid is not None and not keep:
-            self.current_vbumps = [b for b in self.current_vbumps if b.group != gid] + moved
+            remaining = [b for b in self.current_vbumps if b.group != gid]
+            updated = remaining + moved
+            self.current_vbumps = self._collection_from(updated)
+            self._mark_collection_modified(self.current_vbumps)
         elif gid is None and not keep:
-            self.current_vbumps = [b for b in self.current_vbumps if b not in selected] + moved
+            self.current_vbumps = self._collection_from(moved)
+            self._mark_collection_modified(self.current_vbumps)
         else:
-            self.current_vbumps.extend(copies)
+            self._append_to_current(copies)
 
         if auto_group_map:
             assigned = ", ".join(str(v) for v in sorted(auto_group_map.values()))

@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 from VBump.Basic import VBump
 
 def modify_diameter(vbumps:List[VBump], new_D:float):
@@ -12,19 +12,27 @@ def modify_height(vbumps:List[VBump], new_H:float):
         v.y1 = v.y0 + (new_H/l) * (v.y1 - v.y0)
         v.z1 = v.z0 + (new_H/l) * (v.z1 - v.z0)
     
-def move_vbumps(selected_vbumps:List[VBump], reference_point:Tuple[float], new_point:Tuple[float], new_group:int=None, new_D:int=None, keep_origin:bool=False):
-    delta_u = (new_point[0] - reference_point[0], new_point[1] - reference_point[1], new_point[2] - reference_point[2])
-    ret = []
+def move_vbumps(
+    selected_vbumps: List[VBump],
+    delta_u: Tuple[float],
+    new_group: int | None = None,
+    new_D: int | None = None,
+    keep_origin: bool = False,
+    group_map: Dict[int, int] | None = None,
+):
+    ret: list[VBump] = []
     if keep_origin:
-        ret += selected_vbumps
+        ret.extend(selected_vbumps)
     for vb in selected_vbumps:
         new_b = VBump.from_other(vb) + delta_u
-        if new_D:
+        if new_D is not None:
             new_b.D = new_D
-        if new_group:
+        if group_map and vb.group in group_map:
+            new_b.group = group_map[vb.group]
+        elif new_group is not None:
             new_b.group = new_group
         ret.append(new_b)
-    print(f"✅ Successfully move vbumps from {reference_point} to {new_point}.")
+    print(f"✅ Successfully move {len(selected_vbumps)} vbumps by {delta_u}.")
     return ret
 
 if __name__ == "__main__":
