@@ -4,7 +4,6 @@ from typing import List, Tuple
 
 from VBump.Basic import VBump, load_csv, to_csv, load_hdf5, to_hdf5
 from VBump.CreateRectangularArea import (
-    LARGE_VBUMP_THRESHOLD,
     bounding_box_vbumps_for_rectangular_area,
     create_rectangular_area_XY_by_number,
     create_rectangular_area_XY_by_number_to_hdf5,
@@ -26,6 +25,7 @@ from VBump.VBumpsManip import modify_diameter, modify_height, move_vbumps
 GREEN = "\033[92m"
 RESET = "\033[0m"
 
+LARGE_VBUMP_THRESHOLD = 20_000
 
 def gprint(message: str) -> None:
     print(f"{GREEN}{message}{RESET}")

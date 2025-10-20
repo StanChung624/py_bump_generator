@@ -6,9 +6,6 @@ from typing import Callable, Tuple
 from VBump.Basic import VBump, _require_h5py, _require_numpy
 from VBump.ExportWDL import AABB
 
-LARGE_VBUMP_THRESHOLD = 20_000_000
-
-
 def _emit_log(
     callback: Callable[[str], None] | None,
     message: str,

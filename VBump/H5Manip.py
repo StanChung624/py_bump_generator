@@ -159,3 +159,124 @@ def modify_vbump_hdf5(
             )
 
         print(f"🎯 Updated {len(group_bbox)} group bounding boxes.")
+
+def merge_hdf5(
+    src_paths: List[str],
+    dst_path: str,
+    *,
+    dataset_name: str = "vbump",
+    output_name: str | None = None,
+    chunk_size: int = 1_000_000
+) -> None:
+    """
+    Merge multiple vbump HDF5 datasets into one file.
+    Preserve 'groups' structure and recompute bounding boxes.
+    """
+    h5py = _require_h5py()
+    np = _require_numpy()
+
+    # === Step 1. 建立輸出檔案 ===
+    with h5py.File(dst_path, 'w') as fout:
+        target_dataset_name = output_name or dataset_name
+        dset_out = None
+        group_bbox: dict[int, list[float]] = {}
+        overall_bbox: list[float] | None = None
+
+        for path in src_paths:
+            with h5py.File(path, 'r') as fin:
+                if dataset_name not in fin:
+                    print(f"⚠️ Skip '{path}', dataset '{dataset_name}' not found.")
+                    continue
+
+                dset_in = fin[dataset_name]
+                dtype = dset_in.dtype
+                total = dset_in.shape[0]
+                print(f"📂 Merging {path} ({total:,} rows)")
+
+                # 若第一個檔案，建立輸出 dataset
+                if dset_out is None:
+                    dset_out = fout.create_dataset(
+                        target_dataset_name,
+                        shape=(0,),
+                        maxshape=(None,),
+                        dtype=dtype,
+                        chunks=True
+                    )
+
+                # === Step 2. 分 chunk 讀取與寫入 ===
+                for start in range(0, total, chunk_size):
+                    end = min(start + chunk_size, total)
+                    arr = dset_in[start:end]
+
+                    # 更新 group bbox
+                    for row in arr:
+                        gid = int(row['group'])
+                        x_list = [float(row['x0']), float(row['x1'])]
+                        y_list = [float(row['y0']), float(row['y1'])]
+                        z_list = [float(row['z0']), float(row['z1'])]
+                        x_min, x_max = min(x_list), max(x_list)
+                        y_min, y_max = min(y_list), max(y_list)
+                        z_min, z_max = min(z_list), max(z_list)
+
+                        if gid not in group_bbox:
+                            group_bbox[gid] = [x_min, y_min, z_min, x_max, y_max, z_max]
+                        else:
+                            bbox = group_bbox[gid]
+                            bbox[0] = min(bbox[0], x_min)
+                            bbox[1] = min(bbox[1], y_min)
+                            bbox[2] = min(bbox[2], z_min)
+                            bbox[3] = max(bbox[3], x_max)
+                            bbox[4] = max(bbox[4], y_max)
+                            bbox[5] = max(bbox[5], z_max)
+
+                        if overall_bbox is None:
+                            overall_bbox = [x_min, y_min, z_min, x_max, y_max, z_max]
+                        else:
+                            overall_bbox[0] = min(overall_bbox[0], x_min)
+                            overall_bbox[1] = min(overall_bbox[1], y_min)
+                            overall_bbox[2] = min(overall_bbox[2], z_min)
+                            overall_bbox[3] = max(overall_bbox[3], x_max)
+                            overall_bbox[4] = max(overall_bbox[4], y_max)
+                            overall_bbox[5] = max(overall_bbox[5], z_max)
+
+                    # 寫入新 chunk
+                    old_size = dset_out.shape[0]
+                    new_size = old_size + len(arr)
+                    dset_out.resize((new_size,))
+                    dset_out[old_size:new_size] = arr
+
+                    print(f"✅ {path} Chunk {start:,}-{end:,}")
+
+                # === Step 3. 合併 groups ===
+                if 'groups' in fin:
+                    if 'groups' not in fout:
+                        fout_groups = fout.create_group('groups')
+                    else:
+                        fout_groups = fout['groups']
+
+                    for gid, subgroup in fin['groups'].items():
+                        if gid not in fout_groups:
+                            fin.copy(f'groups/{gid}', fout_groups)
+
+        # === Step 4. 更新 bounding box ===
+        if dset_out is not None:
+            fout_groups = fout.get('groups', fout.create_group('groups'))
+            for gid, bbox in group_bbox.items():
+                if str(gid) not in fout_groups:
+                    subgroup = fout_groups.create_group(str(gid))
+                else:
+                    subgroup = fout_groups[str(gid)]
+                subgroup.attrs['bounding_box'] = (
+                    (bbox[0], bbox[1], bbox[2]),
+                    (bbox[3], bbox[4], bbox[5])
+                )
+
+            if overall_bbox is not None:
+                dset_out.attrs['bounding_box'] = (
+                    (overall_bbox[0], overall_bbox[1], overall_bbox[2]),
+                    (overall_bbox[3], overall_bbox[4], overall_bbox[5])
+                )
+
+            print(f"🎯 Merged {len(src_paths)} files, {len(group_bbox)} group bboxes updated.")
+        else:
+            print("⚠️ No valid datasets merged.")

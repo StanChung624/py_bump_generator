@@ -70,15 +70,23 @@ def plot_vbumps(
             )
         handles.append(plt.Line2D([0], [0], color=color, lw=2, label=f'Group {group}'))
 
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    
+    ax.set_xlabel('X', fontsize=9)
+    ax.set_ylabel('Y', fontsize=9)
+    ax.set_zlabel('Z', fontsize=9)
+    ax.tick_params(labelsize=8)
+
     if handles:
-        ax.set_position([0.07, 0.1, 0.6, 0.8])
-        legend_ax = ax.figure.add_axes([0.72, 0.1, 0.25, 0.8])
-        legend_ax.axis('off')
-        legend_ax.legend(handles=handles, title="Legend", loc='center', frameon=True)
+        ax.set_position([0.06, 0.08, 0.7, 0.88])
+        legend = ax.legend(
+            handles=handles,
+            title="Legend",
+            loc='upper left',
+            bbox_to_anchor=(1.02, 1.0),
+            borderaxespad=0,
+            frameon=True,
+            fontsize=8,
+        )
+        legend.get_title().set_fontsize(9)
             
 
     # Compute axis limits
@@ -185,17 +193,25 @@ def plot_vbumps_aabb(
         cx = (aabb.xmin + aabb.xmax) / 2
         cy = (aabb.ymin + aabb.ymax) / 2
         cz = (aabb.zmin + aabb.zmax) / 2
-        ax.text(cx, cy, cz, f'{group}', color=color, fontsize=10, weight='bold')
+        ax.text(cx, cy, cz, f'{group}', color=color, fontsize=8, weight='bold')
 
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
+    ax.set_xlabel('X', fontsize=7)
+    ax.set_ylabel('Y', fontsize=7)
+    ax.set_zlabel('Z', fontsize=7)
+    ax.tick_params(labelsize=6)
 
     if handles:
-        ax.set_position([0.07, 0.1, 0.6, 0.8])
-        legend_ax = ax.figure.add_axes([0.72, 0.1, 0.25, 0.8])
-        legend_ax.axis('off')
-        legend_ax.legend(handles=handles, title="Legend", loc='center', frameon=True)
+        ax.set_position([0.06, 0.08, 0.7, 0.88])
+        legend = ax.legend(
+            handles=handles,
+            title="Legend",
+            loc='upper left',
+            bbox_to_anchor=(1.02, 1.0),
+            borderaxespad=0,
+            frameon=True,
+            fontsize=8,
+        )
+        legend.get_title().set_fontsize(9)
     
     # Compute axis limits from all AABBs and substrate
     xs, ys, zs = [], [], []
@@ -230,6 +246,7 @@ def plot_vbumps_aabb(
     
 
 if __name__ == "__main__":
-    from VBump.Basic import load_csv
-    vbumps = load_csv('model_Run1.vbump')
-    plot_vbumps_aabb(vbumps, (0,0,0), (100,100,0))
+    from VBump.Basic import load_csv, flatten_groups
+
+    vbumps = flatten_groups(load_csv('model_Run1.vbump'))
+    plot_vbumps_aabb(vbumps, (0, 0, 0), (100, 100, 0))

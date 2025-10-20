@@ -9,8 +9,9 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import main
 import h5py
-
 from VBump.Basic import VBumpCollection
+
+LARGE_VBUMP_THRESHOLD = 20_000
 
 from ui.dialogs import (
     request_count_parameters,
