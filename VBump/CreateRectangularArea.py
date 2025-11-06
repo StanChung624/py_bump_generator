@@ -66,8 +66,8 @@ def normalize_rectangular_area_from_counts(
     """Normalize count-based inputs into explicit bounds and pitch distances."""
     if x_num <= 0 or y_num <= 0:
         raise ValueError("Counts must be positive numbers.")
-    x_pitch = abs(p1[0] - p0[0]) / x_num
-    y_pitch = abs(p1[1] - p0[1]) / y_num
+    x_pitch = abs(p1[0] - p0[0]) / (x_num-1)
+    y_pitch = abs(p1[1] - p0[1]) / (y_num-1)
     new_p0 = [0.0, 0.0]
     new_p1 = [0.0, 0.0]
     new_p0[0] = (p0[0] + p1[0]) / 2 - (x_num / 2) * x_pitch
