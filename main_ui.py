@@ -389,48 +389,6 @@ class VBumpUI(QMainWindow):
 
         estimated = main.estimate_rectangular_area_XY_by_pitch_count(p0, p1, x_pitch, y_pitch)
         try:
-            if estimated >= main.LARGE_VBUMP_THRESHOLD:
-                QMessageBox.information(
-                    self,
-                    "Large Dataset",
-                    (
-                        f"The requested grid would generate {estimated:,} vbumps, which exceeds the in-memory limit "
-                        f"({main.LARGE_VBUMP_THRESHOLD:,}). The full dataset will be written to an HDF5 file."
-                        " Only two bounding-box markers will remain in memory."
-                    ),
-                )
-                path, _ = QFileDialog.getSaveFileName(
-                    self,
-                    "Save HDF5",
-                    "",
-                    "HDF5 Files (*.h5 *.hdf5)",
-                )
-                if not path:
-                    self.log("⚠️ Large dataset generation cancelled (no file selected).")
-                    return
-
-                def task(log_emit):
-                    written = main.create_rectangular_area_XY_by_pitch_to_hdf5(
-                        path,
-                        p0,
-                        p1,
-                        x_pitch,
-                        y_pitch,
-                        dia,
-                        group,
-                        z,
-                        h,
-                        log_callback=log_emit,
-                    )
-                    markers = main.bounding_box_vbumps_for_rectangular_area(p0, p1, z, h, dia, group)
-                    return written, path, markers
-
-                self.log(
-                    f"🚀 Streaming {estimated:,} bumps to {path}. Live progress will appear below."
-                )
-                self._start_stream_worker(task)
-                return
-
             new_vbumps = main.create_rectangular_area_XY_by_pitch(p0, p1, x_pitch, y_pitch, dia, group, z, h)
             self.log(f"📐 Created {len(new_vbumps)} bumps by pitch")
         except Exception as exc:
@@ -457,51 +415,6 @@ class VBumpUI(QMainWindow):
 
         estimated = main.estimate_rectangular_area_XY_by_number_count(x_num, y_num)
         try:
-            if estimated >= main.LARGE_VBUMP_THRESHOLD:
-                QMessageBox.information(
-                    self,
-                    "Large Dataset",
-                    (
-                        f"The requested grid would generate {estimated:,} vbumps, which exceeds the in-memory limit "
-                        f"({main.LARGE_VBUMP_THRESHOLD:,}). The full dataset will be written to an HDF5 file."
-                        " Only two bounding-box markers will remain in memory."
-                    ),
-                )
-                path, _ = QFileDialog.getSaveFileName(
-                    self,
-                    "Save HDF5",
-                    "",
-                    "HDF5 Files (*.h5 *.hdf5)",
-                )
-                if not path:
-                    self.log("⚠️ Large dataset generation cancelled (no file selected).")
-                    return
-
-                def task(log_emit):
-                    new_p0, new_p1, x_pitch, y_pitch = main.normalize_rectangular_area_from_counts(
-                        p0, p1, x_num, y_num
-                    )
-                    written = main.create_rectangular_area_XY_by_number_to_hdf5(
-                        path,
-                        p0,
-                        p1,
-                        x_num,
-                        y_num,
-                        dia,
-                        group,
-                        z,
-                        h,
-                        log_callback=log_emit,
-                    )
-                    markers = main.bounding_box_vbumps_for_rectangular_area(new_p0, new_p1, z, h, dia, group)
-                    return written, path, markers
-
-                self.log(
-                    f"🚀 Streaming {estimated:,} bumps to {path}. Live progress will appear below."
-                )
-                self._start_stream_worker(task)
-                return
-
             new_vbumps = main.create_rectangular_area_XY_by_number(p0, p1, x_num, y_num, dia, group, z, h)
             self.log(f"📏 Created {len(new_vbumps)} bumps by count")
         except Exception as exc:
