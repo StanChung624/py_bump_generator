@@ -117,6 +117,8 @@ def plot_vbumps(
     ax.set_zlim3d([z_min, z_max * 5])
 
     if not has_ax:
+        ax.view_init(elev=89, azim=0)
+        ax.set_zlim3d([z_min, z_max * 50])
         plt.show()
     
 def plot_vbumps_aabb(
