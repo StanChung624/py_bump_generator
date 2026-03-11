@@ -1,17 +1,42 @@
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QPushButton, QLineEdit, QLabel, QFileDialog, QTextEdit, QCheckBox, QMessageBox, QGroupBox
-)
-from PySide6.QtCore import QThread
+from __future__ import annotations
+
+import shutil
+import uuid
+from pathlib import Path
+from typing import Callable, Tuple
+
+import h5py
 from PySide6.QtGui import QTextCursor
-from typing import Tuple
+from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-import main
-import h5py
-from VBump.Basic import VBumpCollection
 
-LARGE_VBUMP_THRESHOLD = 20_000
+from VBump.Basic import VBump, VBumpCollection, load_csv, load_hdf5, to_csv, to_hdf5
+from VBump.CreateRectangularArea import (
+    create_rectangular_area_XY_by_number_to_hdf5,
+    create_rectangular_area_XY_by_pitch_to_hdf5,
+)
+from VBump.ExportVTP import write_vbumps_vtp
+from VBump.ExportWDL import (
+    vbump_2_wdl_as_airtrap,
+    vbump_2_wdl_as_weldline,
+    vbump_2_wdl_as_weldline_AABB,
+)
+from VBump.VBumpPlot import plot_vbumps, plot_vbumps_aabb
+from VBump.DXFImport import DXFVBumpImporter
 
 from ui.dialogs import (
     request_count_parameters,
@@ -20,7 +45,10 @@ from ui.dialogs import (
     request_pitch_parameters,
     request_substrate_box,
 )
-from ui.streaming import HDF5StreamWorker
+
+PLOT_MATERIALIZE_THRESHOLD = 1_000_000
+HDF5_CHUNK_SIZE = 1_000_000
+
 
 class VBumpUI(QMainWindow):
     def __init__(self):
@@ -28,29 +56,27 @@ class VBumpUI(QMainWindow):
         self.setWindowTitle("Virtual Bump CSV Generator (GUI)")
         self.setMinimumSize(1000, 700)
 
-        # 狀態變數
         self.loaded_vbumps: VBumpCollection = VBumpCollection()
         self.current_vbumps: VBumpCollection = VBumpCollection()
         self.substrate_p0: Tuple[float, float, float] | None = None
         self.substrate_p1: Tuple[float, float, float] | None = None
-        self._stream_threads: list[QThread] = []
+        self.proxy_dir = Path(__file__).resolve().parent / ".proxy_runtime"
+        self.proxy_dir.mkdir(parents=True, exist_ok=True)
+        self.proxy_h5_path: str | None = None
 
-        # 主容器
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(10, 10, 10, 10)
         self.setCentralWidget(central)
 
-        # === File 操作 ===
         file_box = QGroupBox("📂 File Operations")
         flayout = QHBoxLayout(file_box)
-        self.btn_load = QPushButton("Load CSV")
-        self.btn_save = QPushButton("Save CSV")
+        self.btn_load = QPushButton("Load")
+        self.btn_save = QPushButton("Save")
         flayout.addWidget(self.btn_load)
         flayout.addWidget(self.btn_save)
         layout.addWidget(file_box)
 
-        # === Create Area ===
         create_box = QGroupBox("📐 Create Rectangular Area")
         form_create = QFormLayout(create_box)
         self.btn_create_pitch = QPushButton("Generate by Pitch")
@@ -58,7 +84,6 @@ class VBumpUI(QMainWindow):
         form_create.addRow(self.btn_create_pitch, self.btn_create_count)
         layout.addWidget(create_box)
 
-        # === Modify / Move ===
         mod_box = QGroupBox("🔧 Modify / Move")
         mlayout = QFormLayout(mod_box)
         self.btn_modify_diam = QPushButton("Modify Diameter")
@@ -73,18 +98,18 @@ class VBumpUI(QMainWindow):
         mlayout.addRow(btn_row)
         layout.addWidget(mod_box)
 
-        # === Export / Plot ===
         exp_box = QGroupBox("📤 Export / Plot")
         explayout = QHBoxLayout(exp_box)
         self.btn_weldline = QPushButton("Export WDL (Weldline)")
         self.btn_airtrap = QPushButton("Export WDL (Airtrap)")
+        self.btn_vtp = QPushButton("Export VTP")
         self.btn_plot = QPushButton("Plot")
         explayout.addWidget(self.btn_weldline)
         explayout.addWidget(self.btn_airtrap)
+        explayout.addWidget(self.btn_vtp)
         explayout.addWidget(self.btn_plot)
         layout.addWidget(exp_box)
 
-        # === Log & Plot (並排顯示) ===
         layout.addWidget(QLabel("🧾 Log Output:"))
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
@@ -94,13 +119,12 @@ class VBumpUI(QMainWindow):
         self.figure = Figure(figsize=(6, 4))
         self.canvas = FigureCanvas(self.figure)
         plot_layout.addWidget(self.canvas)
-        # === View Control Buttons ===
+
         view_btn_layout = QHBoxLayout()
         self.btn_view_top = QPushButton("Top")
         self.btn_view_front = QPushButton("Front")
         self.btn_view_right = QPushButton("Right")
         self.btn_view_default = QPushButton("Default")
-
         view_btn_layout.addWidget(self.btn_view_top)
         view_btn_layout.addWidget(self.btn_view_front)
         view_btn_layout.addWidget(self.btn_view_right)
@@ -125,7 +149,6 @@ class VBumpUI(QMainWindow):
         bottom_split.addWidget(self.plot_box, stretch=2)
         layout.addLayout(bottom_split, stretch=1)
 
-        # 綁定事件
         self.btn_load.clicked.connect(self.load_csv)
         self.btn_save.clicked.connect(self.save_csv)
         self.btn_create_pitch.clicked.connect(self.create_pitch)
@@ -136,75 +159,25 @@ class VBumpUI(QMainWindow):
         self.btn_delete_group.clicked.connect(self.delete_group)
         self.btn_weldline.clicked.connect(self.export_weldline)
         self.btn_airtrap.clicked.connect(self.export_airtrap)
+        self.btn_vtp.clicked.connect(self.export_vtp)
         self.btn_plot.clicked.connect(self.plot_aabb)
 
-        # 初始 log
         self.log("🐢 Virtual Bump Generator (GUI mode) started.")
+        self.log("🔁 Proxy mode is enabled for all operations.")
 
-    # === 工具函式 ===
     def log(self, text):
         self.log_view.append(text)
         self.log_view.moveCursor(QTextCursor.End)
         QApplication.processEvents()
 
-    def _ensure_collection(self, bumps) -> VBumpCollection:
-        if isinstance(bumps, VBumpCollection):
-            return bumps
-        return VBumpCollection(list(bumps))
+    def _next_proxy_path(self, stem: str) -> str:
+        return str((self.proxy_dir / f"{stem}_{uuid.uuid4().hex}.h5").resolve())
 
-    def _clone_vbumps(self, bumps) -> list[main.VBump]:
-        return [main.VBump.from_other(b) for b in bumps]
-
-    def _collection_from(self, items, template: VBumpCollection | None = None, **overrides) -> VBumpCollection:
-        data = list(items)
-        if template is not None:
-            collection = VBumpCollection(
-                data,
-                bounding_box=template.bounding_box,
-                group_bounding_boxes=dict(template.group_bounding_boxes or {}),
-                source_count=template.source_count,
-                is_bounding_box_only=template.is_bounding_box_only,
-                link_h5_filepath=template.link_h5_filepath,
-            )
-        else:
-            collection = VBumpCollection(
-                data,
-                bounding_box=None,
-                group_bounding_boxes={},
-                source_count=len(data),
-                is_bounding_box_only=False,
-                link_h5_filepath=None,
-            )
-        for key, value in overrides.items():
-            setattr(collection, key, value)
-        return collection
-
-    def _mark_collection_modified(self, collection: VBumpCollection) -> None:
-        collection.bounding_box = None
-        collection.group_bounding_boxes = {}
-        collection.link_h5_filepath = None
-        collection.is_bounding_box_only = False
-        collection.source_count = len(collection)
-
-    def _append_to_current(
-        self,
-        bumps,
-        *,
-        metadata_template: VBumpCollection | None = None,
-        metadata_overrides: dict | None = None,
-    ) -> None:
-        source = self._ensure_collection(bumps)
-        clones = self._clone_vbumps(source)
-        template = metadata_template or source
-        if not self.current_vbumps:
-            self.current_vbumps = self._collection_from(clones, template)
-        else:
-            self.current_vbumps.extend(clones)
-            self._mark_collection_modified(self.current_vbumps)
-            return
-        if metadata_overrides:
-            for key, value in metadata_overrides.items():
-                setattr(self.current_vbumps, key, value)
+    def _ensure_proxy_loaded(self) -> bool:
+        if not self.proxy_h5_path:
+            QMessageBox.warning(self, "Warning", "No bumps loaded.")
+            return False
+        return True
 
     def _compute_bounding_box(self, bumps) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
         points_x: list[float] = []
@@ -221,77 +194,282 @@ class VBumpUI(QMainWindow):
             (max(points_x), max(points_y), max(points_z)),
         )
 
-    def f(self, edit: QLineEdit, default=None, cast=float):
-        t = edit.text().strip()
-        if not t:
-            return default
-        try:
-            return cast(t)
-        except ValueError:
-            return default
+    def _set_active_proxy(self, path: str) -> None:
+        self.proxy_h5_path = path
+        proxy_markers = load_hdf5(path, only_bounding_boxes=True)
+        self.current_vbumps = proxy_markers
+        self.loaded_vbumps = VBumpCollection(proxy_markers)
 
-    def _start_stream_worker(self, task, dialog=None):
-        worker = HDF5StreamWorker(task)
-        thread = QThread(self)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.progress.connect(self.log)
-        worker.finished.connect(lambda written, path, markers: self._stream_finished(thread, worker, written, path, markers))
-        worker.error.connect(lambda message: self._stream_error(thread, worker, message))
-        thread.start()
-        thread.worker = worker  # retain reference for the lifetime of the thread
-        self._stream_threads.append(thread)
-        if dialog is not None:
-            dialog.accept()
+    def _build_proxy_from_csv(self, csv_path: str) -> str:
+        vbumps = load_csv(csv_path)
+        target = self._next_proxy_path("load_csv")
+        to_hdf5(target, vbumps, log_callback=self.log)
+        return target
 
-    def _stream_finished(self, thread: QThread, worker: HDF5StreamWorker, written: int, path: str, markers: list[main.VBump]):
-        if markers:
-            overrides = {
-                "source_count": written,
-                "is_bounding_box_only": True,
-                "link_h5_filepath": path,
-            }
-            bbox = self._compute_bounding_box(markers)
-            if bbox is not None:
-                overrides["bounding_box"] = bbox
-            self._append_to_current(markers, metadata_overrides=overrides)
-            self.log(f"📏 Stored {len(markers)} bounding-box markers in memory after streaming {written:,} bumps from {path}.")
-            if self.substrate_p0 and self.substrate_p1:
-                self.plot_aabb()
-        self._teardown_stream_thread(thread, worker)
+    def _build_proxy_from_dxf(self, dxf_path: str) -> str | None:
+        from PySide6.QtWidgets import QInputDialog
 
-    def _stream_error(self, thread: QThread, worker: HDF5StreamWorker, message: str):
-        self.log(f"❌ Streaming failed: {message}")
-        QMessageBox.critical(self, "Stream Error", message)
-        self._teardown_stream_thread(thread, worker)
+        group, ok = QInputDialog.getInt(self, "DXF Import", "Group ID:", 1, 1, 9999)
+        if not ok:
+            return None
+        height, ok = QInputDialog.getDouble(self, "DXF Import", "Height:", 10.0, -1e9, 1e9, 6)
+        if not ok:
+            return None
+        base_z, ok = QInputDialog.getDouble(self, "DXF Import", "Base Z:", 0.0, -1e9, 1e9, 6)
+        if not ok:
+            return None
+        unit_scale, ok = QInputDialog.getDouble(
+            self,
+            "DXF Import",
+            "Unit scale (DXF unit -> output unit):",
+            0.001,
+            1e-12,
+            1e12,
+            9,
+        )
+        if not ok:
+            return None
 
-    def _teardown_stream_thread(self, thread: QThread, worker: HDF5StreamWorker):
-        thread.quit()
-        thread.wait()
-        worker.deleteLater()
-        thread.deleteLater()
-        if thread in self._stream_threads:
-            self._stream_threads.remove(thread)
-        # Detach to avoid double-free on QApplication teardown
-        try:
-            thread.setParent(None)
-        except Exception:
-            pass
+        importer = DXFVBumpImporter(unit_scale=unit_scale, base_z=base_z)
+        vbumps, report = importer.import_file(dxf_path, group=group, height=height)
+        self.log(
+            f"✅ DXF parsed: {len(vbumps):,} bumps "
+            f"(geometry={report.used_geometry}, diagnostics={report.diagnostics_count})"
+        )
+        target = self._next_proxy_path("load_dxf")
+        to_hdf5(target, vbumps, log_callback=self.log)
+        return target
 
-    def closeEvent(self, event):
-        # Gracefully stop any worker threads
-        for t in list(self._stream_threads):
+    def _copy_hdf5_to_proxy(self, src_path: str) -> str:
+        target = self._next_proxy_path("load_h5")
+        shutil.copy2(src_path, target)
+        return target
+
+    def _iterate_dtype_names(self, dset) -> list[str]:
+        names = list(dset.dtype.names or [])
+        if not names:
+            raise ValueError("Invalid vbump dataset format.")
+        return names
+
+    def _update_bbox(
+        self,
+        record: dict,
+        overall_bbox: list[float] | None,
+        group_bbox: dict[int, list[float]],
+    ) -> list[float]:
+        x0 = float(record["x0"])
+        y0 = float(record["y0"])
+        z0 = float(record["z0"])
+        x1 = float(record["x1"])
+        y1 = float(record["y1"])
+        z1 = float(record["z1"])
+        diameter = float(record["D"])
+        gid = int(record["group"])
+        half_d = diameter / 2.0
+
+        x_min = min(x0, x1) - half_d
+        x_max = max(x0, x1) + half_d
+        y_min = min(y0, y1) - half_d
+        y_max = max(y0, y1) + half_d
+        z_min = min(z0, z1)
+        z_max = max(z0, z1)
+
+        if overall_bbox is None:
+            overall_bbox = [x_min, y_min, z_min, x_max, y_max, z_max]
+        else:
+            overall_bbox[0] = min(overall_bbox[0], x_min)
+            overall_bbox[1] = min(overall_bbox[1], y_min)
+            overall_bbox[2] = min(overall_bbox[2], z_min)
+            overall_bbox[3] = max(overall_bbox[3], x_max)
+            overall_bbox[4] = max(overall_bbox[4], y_max)
+            overall_bbox[5] = max(overall_bbox[5], z_max)
+
+        bbox = group_bbox.get(gid)
+        if bbox is None:
+            group_bbox[gid] = [x_min, y_min, z_min, x_max, y_max, z_max]
+        else:
+            bbox[0] = min(bbox[0], x_min)
+            bbox[1] = min(bbox[1], y_min)
+            bbox[2] = min(bbox[2], z_min)
+            bbox[3] = max(bbox[3], x_max)
+            bbox[4] = max(bbox[4], y_max)
+            bbox[5] = max(bbox[5], z_max)
+
+        return overall_bbox
+
+    def _write_bbox_attrs(self, fout, dset_out, overall_bbox, group_bbox) -> None:
+        if overall_bbox is not None:
+            dset_out.attrs["bounding_box"] = (
+                (overall_bbox[0], overall_bbox[1], overall_bbox[2]),
+                (overall_bbox[3], overall_bbox[4], overall_bbox[5]),
+            )
+        groups_node = fout.create_group("groups")
+        for gid, bbox in sorted(group_bbox.items()):
+            node = groups_node.create_group(str(gid))
+            node.attrs["bounding_box"] = (
+                (bbox[0], bbox[1], bbox[2]),
+                (bbox[3], bbox[4], bbox[5]),
+            )
+
+    def _merge_proxy_paths(self, paths: list[str]) -> str:
+        out_path = self._next_proxy_path("merge")
+        with h5py.File(out_path, "w") as fout:
+            dset_out = None
+            names = None
+            overall_bbox = None
+            group_bbox: dict[int, list[float]] = {}
+
+            for path in paths:
+                with h5py.File(path, "r") as fin:
+                    if "vbump" not in fin:
+                        raise KeyError(f"Dataset 'vbump' not found in {path}.")
+                    dset_in = fin["vbump"]
+                    if dset_out is None:
+                        dset_out = fout.create_dataset(
+                            "vbump",
+                            shape=(0,),
+                            maxshape=(None,),
+                            dtype=dset_in.dtype,
+                            chunks=True,
+                            compression="gzip",
+                        )
+                        names = self._iterate_dtype_names(dset_in)
+                    for start in range(0, int(dset_in.shape[0]), HDF5_CHUNK_SIZE):
+                        end = min(start + HDF5_CHUNK_SIZE, int(dset_in.shape[0]))
+                        arr = dset_in[start:end]
+                        if len(arr) == 0:
+                            continue
+                        old_size = int(dset_out.shape[0])
+                        dset_out.resize((old_size + len(arr),))
+                        dset_out[old_size:old_size + len(arr)] = arr
+                        for row in arr:
+                            record = {name: row[name].item() for name in names}
+                            overall_bbox = self._update_bbox(record, overall_bbox, group_bbox)
+
+            if dset_out is None:
+                raise RuntimeError("No proxy data to merge.")
+            self._write_bbox_attrs(fout, dset_out, overall_bbox, group_bbox)
+        return out_path
+
+    def _transform_proxy(self, transform: Callable[[dict], list[dict]], label: str) -> tuple[str, int]:
+        if not self.proxy_h5_path:
+            raise RuntimeError("No active proxy dataset.")
+
+        out_path = self._next_proxy_path(label)
+        written = 0
+        with h5py.File(self.proxy_h5_path, "r") as fin, h5py.File(out_path, "w") as fout:
+            if "vbump" not in fin:
+                raise KeyError("Dataset 'vbump' not found.")
+            dset_in = fin["vbump"]
+            names = self._iterate_dtype_names(dset_in)
+            dset_out = fout.create_dataset(
+                "vbump",
+                shape=(0,),
+                maxshape=(None,),
+                dtype=dset_in.dtype,
+                chunks=True,
+                compression="gzip",
+            )
+
+            overall_bbox = None
+            group_bbox: dict[int, list[float]] = {}
+
+            for start in range(0, int(dset_in.shape[0]), HDF5_CHUNK_SIZE):
+                end = min(start + HDF5_CHUNK_SIZE, int(dset_in.shape[0]))
+                arr = dset_in[start:end]
+                if len(arr) == 0:
+                    continue
+                out_records = []
+                for row in arr:
+                    record = {name: row[name].item() for name in names}
+                    transformed = transform(record)
+                    for item in transformed:
+                        out_records.append(tuple(item[name] for name in names))
+                        overall_bbox = self._update_bbox(item, overall_bbox, group_bbox)
+                if out_records:
+                    old_size = int(dset_out.shape[0])
+                    chunk = len(out_records)
+                    dset_out.resize((old_size + chunk,))
+                    dset_out[old_size:old_size + chunk] = out_records
+                    written += chunk
+            self._write_bbox_attrs(fout, dset_out, overall_bbox, group_bbox)
+        return out_path, written
+
+    def _copy_proxy_with_single_group(self, src_path: str, new_group: int) -> str:
+        out_path = self._next_proxy_path("reassign_group")
+        with h5py.File(src_path, "r") as fin, h5py.File(out_path, "w") as fout:
+            if "vbump" not in fin:
+                raise KeyError("Dataset 'vbump' not found.")
+            dset_in = fin["vbump"]
+            names = self._iterate_dtype_names(dset_in)
+            dset_out = fout.create_dataset(
+                "vbump",
+                shape=(0,),
+                maxshape=(None,),
+                dtype=dset_in.dtype,
+                chunks=True,
+                compression="gzip",
+            )
+
+            overall_bbox = None
+            group_bbox: dict[int, list[float]] = {}
+            for start in range(0, int(dset_in.shape[0]), HDF5_CHUNK_SIZE):
+                end = min(start + HDF5_CHUNK_SIZE, int(dset_in.shape[0]))
+                arr = dset_in[start:end]
+                if len(arr) == 0:
+                    continue
+                out_records = []
+                for row in arr:
+                    record = {name: row[name].item() for name in names}
+                    record["group"] = new_group
+                    out_records.append(tuple(record[name] for name in names))
+                    overall_bbox = self._update_bbox(record, overall_bbox, group_bbox)
+                old_size = int(dset_out.shape[0])
+                dset_out.resize((old_size + len(out_records),))
+                dset_out[old_size:old_size + len(out_records)] = out_records
+            self._write_bbox_attrs(fout, dset_out, overall_bbox, group_bbox)
+        return out_path
+
+    def _materialize_current(self) -> VBumpCollection:
+        if not self.proxy_h5_path:
+            return VBumpCollection()
+        return load_hdf5(self.proxy_h5_path, only_bounding_boxes=False)
+
+    def _current_source_count(self) -> int:
+        return int(getattr(self.current_vbumps, "source_count", len(self.current_vbumps)))
+
+    def _get_existing_groups(self) -> set[int]:
+        groups: set[int] = set()
+        if not self.proxy_h5_path:
+            return groups
+        with h5py.File(self.proxy_h5_path, "r") as fin:
+            if "groups" in fin:
+                for name in fin["groups"].keys():
+                    try:
+                        groups.add(int(name))
+                    except ValueError:
+                        continue
+            elif "vbump" in fin:
+                dset = fin["vbump"]
+                for start in range(0, int(dset.shape[0]), HDF5_CHUNK_SIZE):
+                    end = min(start + HDF5_CHUNK_SIZE, int(dset.shape[0]))
+                    arr = dset[start:end]
+                    for gid in arr["group"]:
+                        groups.add(int(gid))
+        return groups
+
+    def _replace_proxy(self, new_path: str, message: str) -> None:
+        old = self.proxy_h5_path
+        self._set_active_proxy(new_path)
+        self.log(message)
+        if old and Path(old) != Path(new_path):
             try:
-                t.quit()
-                t.wait()
-                try:
-                    t.setParent(None)
-                except Exception:
-                    pass
+                if str(old).startswith(str(self.proxy_dir.resolve())):
+                    Path(old).unlink(missing_ok=True)
             except Exception:
                 pass
-        self._stream_threads.clear()
-        # Explicitly detach and delete matplotlib canvas to avoid double free
+
+    def closeEvent(self, event):
         if hasattr(self, "canvas") and self.canvas is not None:
             try:
                 self.canvas.setParent(None)
@@ -303,76 +481,73 @@ class VBumpUI(QMainWindow):
                 pass
         super().closeEvent(event)
 
-    # === 檔案操作 ===
     def load_csv(self):
         path, _ = QFileDialog.getOpenFileName(
-                        self,
-                        "Select File",
-                        "",
-                        "CSV/h5/VBump Files (*.csv *.CSV *.hdf5 *h5 *.vbump *.VBUMP);;All Files (*)"
-                    )
+            self,
+            "Select File",
+            "",
+            "CSV/h5/DXF/VBump Files (*.csv *.CSV *.hdf5 *h5 *.vbump *.VBUMP *.dxf *.DXF);;All Files (*)",
+        )
         if not path:
             return
+
         try:
-            new_vbumps = []
-            if h5py.is_hdf5(path):
-                new_vbumps = main.load_hdf5(path, max_rows=main.LARGE_VBUMP_THRESHOLD)
-                self.log(f"✅ Loading hdf5 format")
-                if getattr(new_vbumps, "is_bounding_box_only", False):
-                    msg = (
-                        f"Source contains {new_vbumps.source_count:,} bumps. Loaded bounding-box markers instead "
-                        f"because the dataset exceeds the threshold {main.LARGE_VBUMP_THRESHOLD:,}."
-                    )
-                    self.log(f"⚠️ {msg}")
-                    QMessageBox.information(self, "Large Dataset", msg)
+            if path.lower().endswith(".dxf"):
+                incoming_proxy = self._build_proxy_from_dxf(path)
+                if incoming_proxy is None:
+                    return
+                self.log("✅ Loading DXF format and converting to proxy hdf5")
+            elif h5py.is_hdf5(path):
+                incoming_proxy = self._copy_hdf5_to_proxy(path)
+                self.log("✅ Loading hdf5 format (proxy copy)")
             else:
-                new_vbumps = main.load_csv(path)
-                self.log(f"✅ Loading csv format")
-            new_collection = self._ensure_collection(new_vbumps)
-            self.loaded_vbumps.extend(new_collection)
-            self._mark_collection_modified(self.loaded_vbumps)
-            self._append_to_current(new_collection)
-            self.log(f"✅ Loaded {len(new_vbumps)} bumps from {path} (total {len(self.loaded_vbumps)})")
+                incoming_proxy = self._build_proxy_from_csv(path)
+                self.log("✅ Loading csv format and converting to proxy hdf5")
+
             reply = QMessageBox.question(
                 self,
                 "Reassign Group ID",
                 "Do you want to assign a new group ID to the newly loaded bumps?",
-                QMessageBox.Yes | QMessageBox.No
+                QMessageBox.Yes | QMessageBox.No,
             )
             if reply == QMessageBox.Yes:
                 from PySide6.QtWidgets import QInputDialog
+
                 new_gid, ok = QInputDialog.getInt(self, "New Group ID", "Enter new group ID:", 1, 1, 9999)
                 if ok:
-                    for b in self.current_vbumps[-len(new_vbumps):]:
-                        b.group = new_gid
+                    incoming_proxy = self._copy_proxy_with_single_group(incoming_proxy, new_gid)
                     self.log(f"🔢 Newly loaded bumps reassigned to group {new_gid}.")
+
+            if self.proxy_h5_path:
+                merged = self._merge_proxy_paths([self.proxy_h5_path, incoming_proxy])
+                self._replace_proxy(merged, f"✅ Loaded and appended {path} (total {self._current_source_count():,} bumps)")
+            else:
+                self._replace_proxy(incoming_proxy, f"✅ Loaded {path} ({self._current_source_count():,} bumps)")
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
     def save_csv(self):
-        if not self.current_vbumps:
-            QMessageBox.warning(self, "Warning", "No bumps to save.")
+        if not self._ensure_proxy_loaded():
             return
-        # Ask the user if they want to save as HDF5
+
         reply = QMessageBox.question(
             self,
             "Save as HDF5?",
             "Do you want to save the file as HDF5 format?",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No,
         )
         if reply == QMessageBox.Yes:
             path, _ = QFileDialog.getSaveFileName(self, "Save HDF5", "", "HDF5 Files (*.h5 *.hdf5)")
             if path:
-                self.log(f"🚀 Streaming {len(self.current_vbumps):,} bumps to {path}.")
-                main.to_hdf5(path, self.current_vbumps, log_callback=self.log)
-                self.log(f"💾 Saved to {path}")
+                shutil.copy2(self.proxy_h5_path, path)
+                self.log(f"💾 Saved proxy HDF5 to {path}")
         else:
             path, _ = QFileDialog.getSaveFileName(self, "Save CSV", "", "CSV Files (*.csv)")
             if path:
-                main.to_csv(path, self.current_vbumps)
-                self.log(f"💾 Saved to {path}")
+                vbumps = self._materialize_current()
+                to_csv(path, vbumps)
+                self.log(f"💾 Materialized and saved CSV to {path}")
 
-    # === 建立矩形 ===
     def create_pitch(self):
         dialog_result = request_pitch_parameters(self)
         if not dialog_result:
@@ -387,17 +562,29 @@ class VBumpUI(QMainWindow):
         z = dialog_result.z
         h = dialog_result.h
 
-        estimated = main.estimate_rectangular_area_XY_by_pitch_count(p0, p1, x_pitch, y_pitch)
+        out_proxy = self._next_proxy_path("create_pitch")
         try:
-            new_vbumps = main.create_rectangular_area_XY_by_pitch(p0, p1, x_pitch, y_pitch, dia, group, z, h)
-            self.log(f"📐 Created {len(new_vbumps)} bumps by pitch")
+            written = create_rectangular_area_XY_by_pitch_to_hdf5(
+                out_proxy,
+                p0,
+                p1,
+                x_pitch,
+                y_pitch,
+                dia,
+                group,
+                z,
+                h,
+                log_callback=self.log,
+            )
+            if self.proxy_h5_path:
+                merged = self._merge_proxy_paths([self.proxy_h5_path, out_proxy])
+                self._replace_proxy(merged, f"📐 Appended {written:,} bumps by pitch in proxy mode")
+            else:
+                self._replace_proxy(out_proxy, f"📐 Created {written:,} bumps by pitch in proxy mode")
+            if self.substrate_p0 and self.substrate_p1:
+                self.plot_aabb()
         except Exception as exc:
             QMessageBox.critical(self, "Error", str(exc))
-            return
-
-        self._append_to_current(new_vbumps)
-        if self.substrate_p0 and self.substrate_p1:
-            self.plot_aabb()
 
     def create_count(self):
         dialog_result = request_count_parameters(self)
@@ -413,22 +600,32 @@ class VBumpUI(QMainWindow):
         z = dialog_result.z
         h = dialog_result.h
 
-        estimated = main.estimate_rectangular_area_XY_by_number_count(x_num, y_num)
+        out_proxy = self._next_proxy_path("create_count")
         try:
-            new_vbumps = main.create_rectangular_area_XY_by_number(p0, p1, x_num, y_num, dia, group, z, h)
-            self.log(f"📏 Created {len(new_vbumps)} bumps by count")
+            written = create_rectangular_area_XY_by_number_to_hdf5(
+                out_proxy,
+                p0,
+                p1,
+                x_num,
+                y_num,
+                dia,
+                group,
+                z,
+                h,
+                log_callback=self.log,
+            )
+            if self.proxy_h5_path:
+                merged = self._merge_proxy_paths([self.proxy_h5_path, out_proxy])
+                self._replace_proxy(merged, f"📏 Appended {written:,} bumps by count in proxy mode")
+            else:
+                self._replace_proxy(out_proxy, f"📏 Created {written:,} bumps by count in proxy mode")
+            if self.substrate_p0 and self.substrate_p1:
+                self.plot_aabb()
         except Exception as exc:
             QMessageBox.critical(self, "Error", str(exc))
-            return
 
-        self._append_to_current(new_vbumps)
-        if self.substrate_p0 and self.substrate_p1:
-            self.plot_aabb()
-
-    # === 修改與移動 ===
     def modify_diameter(self):
-        if not self.current_vbumps:
-            QMessageBox.warning(self, "Warning", "No bumps loaded.")
+        if not self._ensure_proxy_loaded():
             return
         dialog_result = request_modify_value(self, "Modify Diameter", "New Diameter:")
         if not dialog_result:
@@ -436,14 +633,21 @@ class VBumpUI(QMainWindow):
 
         gid = dialog_result.group_filter
         new_d = dialog_result.new_value
-        selected = [b for b in self.current_vbumps if gid is None or b.group == gid]
-        main.modify_diameter(selected, new_d)
-        self._mark_collection_modified(self.current_vbumps)
-        self.log(f"🔧 Updated diameter to {new_d} for {len(selected)} bumps")
+
+        def transform(record: dict) -> list[dict]:
+            if gid is not None and int(record["group"]) != gid:
+                return [record]
+            record["D"] = float(new_d)
+            return [record]
+
+        try:
+            out_path, written = self._transform_proxy(transform, "modify_diameter")
+            self._replace_proxy(out_path, f"🔧 Updated diameter to {new_d} (rows now: {written:,})")
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", str(exc))
 
     def modify_height(self):
-        if not self.current_vbumps:
-            QMessageBox.warning(self, "Warning", "No bumps loaded.")
+        if not self._ensure_proxy_loaded():
             return
 
         dialog_result = request_modify_value(self, "Modify Height", "New Height:")
@@ -452,37 +656,59 @@ class VBumpUI(QMainWindow):
 
         gid = dialog_result.group_filter
         new_h = dialog_result.new_value
-        selected = [b for b in self.current_vbumps if gid is None or b.group == gid]
-        if not selected:
-            QMessageBox.information(self, "Info", "No bumps matched the filter.")
-            return
-        main.modify_height(selected, new_h)
-        self._mark_collection_modified(self.current_vbumps)
-        self.log(f"📐 Updated height to {new_h} for {len(selected)} bumps")
-        if self.substrate_p0 and self.substrate_p1:
-            self.plot_aabb()
+
+        def transform(record: dict) -> list[dict]:
+            if gid is not None and int(record["group"]) != gid:
+                return [record]
+            x0, y0, z0 = float(record["x0"]), float(record["y0"]), float(record["z0"])
+            x1, y1, z1 = float(record["x1"]), float(record["y1"]), float(record["z1"])
+            dx = x1 - x0
+            dy = y1 - y0
+            dz = z1 - z0
+            length = (dx * dx + dy * dy + dz * dz) ** 0.5
+            if length == 0:
+                return [record]
+            scale = float(new_h) / length
+            record["x1"] = x0 + scale * dx
+            record["y1"] = y0 + scale * dy
+            record["z1"] = z0 + scale * dz
+            return [record]
+
+        try:
+            out_path, written = self._transform_proxy(transform, "modify_height")
+            self._replace_proxy(out_path, f"📐 Updated height to {new_h} (rows now: {written:,})")
+            if self.substrate_p0 and self.substrate_p1:
+                self.plot_aabb()
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", str(exc))
 
     def delete_group(self):
-        if not self.current_vbumps:
-            QMessageBox.warning(self, "Warning", "No bumps loaded.")
+        if not self._ensure_proxy_loaded():
             return
         from PySide6.QtWidgets import QInputDialog
+
         gid, ok = QInputDialog.getInt(self, "Delete Group", "Enter group ID to delete:", 0, 1, 9999)
         if not ok:
             return
-        before = len(self.current_vbumps)
-        remaining = [b for b in self.current_vbumps if b.group != gid]
-        self.current_vbumps = self._collection_from(remaining)
-        self._mark_collection_modified(self.current_vbumps)
-        after = len(self.current_vbumps)
-        removed = before - after
-        self.log(f"🗑️ Deleted group {gid} ({removed} bumps removed).")
-        if self.substrate_p0 and self.substrate_p1:
-            self.plot_aabb()
+
+        before = self._current_source_count()
+
+        def transform(record: dict) -> list[dict]:
+            if int(record["group"]) == gid:
+                return []
+            return [record]
+
+        try:
+            out_path, written = self._transform_proxy(transform, "delete_group")
+            removed = before - written
+            self._replace_proxy(out_path, f"🗑️ Deleted group {gid} ({removed:,} bumps removed)")
+            if self.substrate_p0 and self.substrate_p1:
+                self.plot_aabb()
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", str(exc))
 
     def move_bumps(self):
-        if not self.current_vbumps:
-            QMessageBox.warning(self, "Warning", "No bumps loaded.")
+        if not self._ensure_proxy_loaded():
             return
 
         dialog_result = request_move_parameters(self)
@@ -490,106 +716,135 @@ class VBumpUI(QMainWindow):
             return
 
         gid = dialog_result.group_filter
-        selected = [b for b in self.current_vbumps if gid is None or b.group == gid]
-        if not selected:
-            QMessageBox.information(self, "Info", "No bumps matched the filter.")
-            return
-
         keep = dialog_result.keep_original
         new_g = dialog_result.new_group
         new_d = dialog_result.new_diameter
+        delta_u = tuple(t - r for t, r in zip(dialog_result.target, dialog_result.reference))
 
         auto_group_map = {}
         if keep and gid is None and new_g is None:
-            existing_groups = [b.group for b in self.current_vbumps if isinstance(b.group, int)]
-            max_group = max(existing_groups) if existing_groups else 0
-            for b in selected:
-                g = b.group
-                if g not in auto_group_map:
-                    max_group += 1
-                    auto_group_map[g] = max_group
+            existing = self._get_existing_groups()
+            max_group = max(existing) if existing else 0
+            with h5py.File(self.proxy_h5_path, "r") as fin:
+                dset = fin["vbump"]
+                seen: set[int] = set()
+                for start in range(0, int(dset.shape[0]), HDF5_CHUNK_SIZE):
+                    end = min(start + HDF5_CHUNK_SIZE, int(dset.shape[0]))
+                    arr = dset[start:end]
+                    for group_value in arr["group"]:
+                        g = int(group_value)
+                        if g not in seen:
+                            seen.add(g)
+                            max_group += 1
+                            auto_group_map[g] = max_group
 
-        delta_u = tuple(t - r for t, r in zip(dialog_result.target, dialog_result.reference))
+        def transform(record: dict) -> list[dict]:
+            current_gid = int(record["group"])
+            selected = gid is None or current_gid == gid
+            if not selected:
+                return [record]
 
-        moved = main.move_vbumps(
-            selected,
-            delta_u,
-            new_g,
-            new_d,
-            keep,
-            auto_group_map if auto_group_map else None,
-        )
-        copies = moved[len(selected):] if keep else moved
+            moved = dict(record)
+            moved["x0"] = float(moved["x0"]) + delta_u[0]
+            moved["y0"] = float(moved["y0"]) + delta_u[1]
+            moved["z0"] = float(moved["z0"]) + delta_u[2]
+            moved["x1"] = float(moved["x1"]) + delta_u[0]
+            moved["y1"] = float(moved["y1"]) + delta_u[1]
+            moved["z1"] = float(moved["z1"]) + delta_u[2]
 
-        if gid is not None and not keep:
-            remaining = [b for b in self.current_vbumps if b.group != gid]
-            updated = remaining + moved
-            self.current_vbumps = self._collection_from(updated)
-            self._mark_collection_modified(self.current_vbumps)
-        elif gid is None and not keep:
-            self.current_vbumps = self._collection_from(moved)
-            self._mark_collection_modified(self.current_vbumps)
-        else:
-            self._append_to_current(copies)
+            if new_d is not None:
+                moved["D"] = float(new_d)
+            if auto_group_map and current_gid in auto_group_map:
+                moved["group"] = int(auto_group_map[current_gid])
+            elif new_g is not None:
+                moved["group"] = int(new_g)
 
-        if auto_group_map:
-            assigned = ", ".join(str(v) for v in sorted(auto_group_map.values()))
-            self.log(f"📤 Duplicated {len(selected)} bumps with new groups {assigned}")
-        else:
-            self.log(f"📤 Moved/duplicated {len(selected)} bumps")
-        if self.substrate_p0 and self.substrate_p1:
-            self.plot_aabb()
+            if keep:
+                return [record, moved]
+            return [moved]
 
-    # === 匯出 / 繪圖 ===
+        try:
+            out_path, written = self._transform_proxy(transform, "move_copy")
+            if auto_group_map:
+                assigned = ", ".join(str(v) for v in sorted(auto_group_map.values()))
+                self._replace_proxy(out_path, f"📤 Duplicated bumps with auto-groups {assigned} (rows now: {written:,})")
+            else:
+                self._replace_proxy(out_path, f"📤 Move/Copy applied (rows now: {written:,})")
+            if self.substrate_p0 and self.substrate_p1:
+                self.plot_aabb()
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", str(exc))
+
     def export_weldline(self):
-        if not self.current_vbumps:
+        if not self._ensure_proxy_loaded():
             return
         path, _ = QFileDialog.getSaveFileName(self, "Save WDL (weldline)", "", "WDL Files (*.wdl)")
         if not path:
             return
-        if len(self.current_vbumps) < 20000:
-            main.vbump_2_wdl_as_weldline(path, self.current_vbumps)
+        vbumps = self._materialize_current()
+        if len(vbumps) < 20000:
+            vbump_2_wdl_as_weldline(path, vbumps)
         else:
-            main.vbump_2_wdl_as_weldline_AABB(path, self.current_vbumps)
-        self.log(f"🧵 Weldline exported to {path}")
+            vbump_2_wdl_as_weldline_AABB(path, vbumps)
+        self.log(f"🧵 Weldline exported to {path} (materialized {len(vbumps):,} rows)")
 
     def export_airtrap(self):
-        if not self.current_vbumps:
+        if not self._ensure_proxy_loaded():
             return
         path, _ = QFileDialog.getSaveFileName(self, "Save WDL (airtrap)", "", "WDL Files (*.wdl)")
         if not path:
             return
-        main.vbump_2_wdl_as_airtrap(path, self.current_vbumps)
-        self.log(f"💨 Airtrap exported to {path}")
+        vbumps = self._materialize_current()
+        vbump_2_wdl_as_airtrap(path, vbumps)
+        self.log(f"💨 Airtrap exported to {path} (materialized {len(vbumps):,} rows)")
 
-    def plot_aabb(self):        
-        if not self.current_vbumps:
+    def export_vtp(self):
+        if not self._ensure_proxy_loaded():
             return
-        # 若尚未設定 substrate box，自動彈出設定視窗
+        path, _ = QFileDialog.getSaveFileName(self, "Save VTP", "", "VTP Files (*.vtp)")
+        if not path:
+            return
+        vbumps = self._materialize_current()
+        write_vbumps_vtp(vbumps, path)
+        self.log(f"🧪 VTP exported to {path} (materialized {len(vbumps):,} rows)")
+
+    def plot_aabb(self):
+        if not self._ensure_proxy_loaded():
+            return
+
         if not self.substrate_p0 or not self.substrate_p1:
             self.set_substrate_box()
-            # 若使用者取消設定則不繪圖
             if not self.substrate_p0 or not self.substrate_p1:
                 return
-        # 清空舊圖
-        self.figure.clear()
 
-        # 傳入 ax 給 main 模組繪圖
-        ax = self.figure.add_subplot(111, projection='3d')
-        if len(self.current_vbumps) < 9000:
-            main.plot_vbumps(self.current_vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
+        self.figure.clear()
+        ax = self.figure.add_subplot(111, projection="3d")
+
+        source_count = self._current_source_count()
+        if source_count <= PLOT_MATERIALIZE_THRESHOLD:
+            vbumps = self._materialize_current()
+            if len(vbumps) < 9000:
+                plot_vbumps(vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
+            else:
+                plot_vbumps_aabb(vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
+            self.log(f"📊 Plot rendered with materialized data ({len(vbumps):,} rows).")
         else:
-            main.plot_vbumps_aabb(self.current_vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
+            plot_vbumps_aabb(self.current_vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
+            self.log(
+                f"📊 Plot rendered from proxy markers (source {source_count:,} rows > {PLOT_MATERIALIZE_THRESHOLD:,})."
+            )
+
         self.canvas.draw()
-        self.log("📊 AABB plotted.")
 
     def set_substrate_box(self):
         auto_bounds = None
         if self.current_vbumps:
-            min_pt, max_pt = self._compute_bounding_box(self.current_vbumps)
-            max_x, max_y, max_z = max_pt
-            max_z *= -1 #set under vbumps and twice as height of vbump
-            auto_bounds = (min_pt, (max_x, max_y, max_z))
+            bounds = self._compute_bounding_box(self.current_vbumps)
+            if bounds is not None:
+                min_pt, max_pt = bounds
+                max_x, max_y, max_z = max_pt
+                max_z *= -1
+                auto_bounds = (min_pt, (max_x, max_y, max_z))
 
         initial = None
         if self.substrate_p0 and self.substrate_p1:
@@ -610,6 +865,7 @@ class VBumpUI(QMainWindow):
 
 if __name__ == "__main__":
     import sys
+
     app = QApplication(sys.argv)
     ui = VBumpUI()
     ui.show()

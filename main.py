@@ -21,6 +21,7 @@ from VBump.ExportWDL import (
 )
 from VBump.VBumpPlot import (plot_vbumps, plot_vbumps_aabb)
 from VBump.VBumpsManip import modify_diameter, modify_height, move_vbumps
+from VBump.DXFImport import DXFVBumpImporter
 
 GREEN = "\033[92m"
 RESET = "\033[0m"
@@ -98,7 +99,7 @@ def display_welcome_banner()->None:
 
 def display_menu() -> None:
     gprint("\n=== Virtual Bump Console ===")
-    gprint("1) Load VBump CSV")
+    gprint("1) Load VBump CSV/HDF5/DXF")
     gprint("2) Save VBump CSV")
     gprint("3) Create rectangular area (pitch)")
     gprint("4) Create rectangular area (count)")
@@ -123,9 +124,27 @@ def main() -> None:
         choice = input("Select an option: ").strip()
 
         if choice == "1":
-            path = input("Path to CSV/HDF5 file: ").strip()
+            path = input("Path to CSV/HDF5/DXF file: ").strip()
             try:
-                if path.lower().endswith(('.h5', '.hdf5')):
+                if path.lower().endswith(".dxf"):
+                    group = prompt_int("Group ID for imported DXF bumps", 1) or 1
+                    z = prompt_float("Base Z", 0.0) or 0.0
+                    height = prompt_float("Height", 10.0) or 10.0
+                    unit_scale = prompt_float("Unit scale (DXF unit -> output unit)", 0.001) or 0.001
+                    min_points = prompt_int("Min points for polyline circle fitting", 6) or 6
+                    max_rms = prompt_float("Max RMS for polyline circle fitting", 1e-2) or 1e-2
+                    importer = DXFVBumpImporter(
+                        unit_scale=unit_scale,
+                        base_z=z,
+                        min_points=min_points,
+                        max_rms=max_rms,
+                    )
+                    new_vbumps, report = importer.import_file(path, group=group, height=height)
+                    gprint(
+                        f"Imported {len(new_vbumps)} bumps from DXF "
+                        f"(geometry={report.used_geometry}, diagnostics={report.diagnostics_count})."
+                    )
+                elif path.lower().endswith(('.h5', '.hdf5')):
                     new_vbumps = load_hdf5(path, max_rows=LARGE_VBUMP_THRESHOLD)
                     gprint("Loaded HDF5 dataset.")
                     if getattr(new_vbumps, "is_bounding_box_only", False):
