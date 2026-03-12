@@ -28,3 +28,4 @@ htmlcov/
 # Generated assets
 *.log
 *.wdl
+*.h5
