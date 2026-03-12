@@ -4,8 +4,7 @@ from dataclasses import dataclass
 import math
 from pathlib import Path
 import sys
-from typing import Iterable, List
-
+from typing import Iterable, List, Callable
 from VBump.Basic import VBump, _require_numpy
 
 
@@ -120,12 +119,14 @@ class DXFVBumpImporter:
         min_points: int = 6,
         max_rms: float = 1e-2,
         prefer_circles: bool = True,
+        log_callback:Callable[[str], None] | None = None,
     ) -> None:
         self.unit_scale = unit_scale
         self.base_z = base_z
         self.min_points = min_points
         self.max_rms = max_rms
         self.prefer_circles = prefer_circles
+        self.log = log_callback
 
     def import_file(self, path: str, *, group: int = 1, height: float = 10.0) -> tuple[List[VBump], DXFImportReport]:
         if height == 0.0:
@@ -141,7 +142,7 @@ class DXFVBumpImporter:
                 "Failed to import dxf_extract. Ensure external/dxfextractor is present and ezdxf is installed."
             ) from exc
 
-        result = extract_geometry(path)
+        result = extract_geometry(path, log_callback=self.log)
         circles_to_use = result.circles
         polylines_to_use = result.closed_polylines
 

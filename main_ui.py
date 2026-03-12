@@ -230,7 +230,7 @@ class VBumpUI(QMainWindow):
         if not ok:
             return None
 
-        importer = DXFVBumpImporter(unit_scale=unit_scale, base_z=base_z)
+        importer = DXFVBumpImporter(unit_scale=unit_scale, base_z=base_z, log_callback=self.log)
         vbumps, report = importer.import_file(dxf_path, group=group, height=height)
         self.log(
             f"✅ DXF parsed: {len(vbumps):,} bumps "
