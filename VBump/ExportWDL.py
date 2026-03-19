@@ -1,5 +1,5 @@
-from typing import List
-from VBump.Basic import VBump
+from typing import Callable, List
+from VBump.Basic import VBump, _emit_log
 
 WDL_TEMPLATE_LINES = """<Header>
 Version      = 1000 
@@ -138,7 +138,7 @@ ItemType2_MaxWLEdge= {N_vbumps}
         index+=1
 
 
-def vbump_2_wdl_as_airtrap(filename:str, vbumps:List[VBump]):
+def vbump_2_wdl_as_airtrap(filename:str, vbumps:List[VBump], log_callback: Callable[[str], None] | None = None):
 
     _update_item_type_info(N_airtrap=len(vbumps))
 
@@ -154,10 +154,10 @@ def vbump_2_wdl_as_airtrap(filename:str, vbumps:List[VBump]):
 
         for i in range(_loc('</AirTrapInfo>'), WDL_EOF):
             f.write(WDL_TEMPLATE_LINES[i])
-    print(f"✅ Successfully write {len(vbumps)} vbumps to file: {filename}")
+    _emit_log(log_callback, f"Successfully exported {len(vbumps)} vbumps to '{filename}'.")
 
 
-def vbump_2_wdl_as_weldline(filename:str, vbumps:List[VBump]):
+def vbump_2_wdl_as_weldline(filename:str, vbumps:List[VBump], log_callback: Callable[[str], None] | None = None):
 
     _update_item_type_info(N_vbumps=len(vbumps))
 
@@ -201,10 +201,10 @@ def vbump_2_wdl_as_weldline(filename:str, vbumps:List[VBump]):
         for i in range(_loc('</Item_1>'), WDL_EOF):
             f.write(WDL_TEMPLATE_LINES[i])
 
-    print(f"✅ Successfully write {len(vbumps)} vbumps to file: {filename}")
+    _emit_log(log_callback, f"Successfully exported {len(vbumps)} vbumps to '{filename}'.")
 
 
-def vbump_2_wdl_as_weldline_AABB(filename:str, vbumps:List[VBump]):
+def vbump_2_wdl_as_weldline_AABB(filename:str, vbumps:List[VBump], log_callback: Callable[[str], None] | None = None):
     new_vbumps = []
     group_vbumps = {}
     for vbump in vbumps:
@@ -215,4 +215,4 @@ def vbump_2_wdl_as_weldline_AABB(filename:str, vbumps:List[VBump]):
 
     for _, aabb in group_vbumps.items():
         new_vbumps += aabb.edges_as_vbumps()    
-    return vbump_2_wdl_as_weldline(filename, new_vbumps)
+    return vbump_2_wdl_as_weldline(filename, new_vbumps, log_callback=log_callback)

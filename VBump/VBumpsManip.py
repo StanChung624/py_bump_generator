@@ -1,5 +1,5 @@
-from typing import Dict, List, Tuple
-from VBump.Basic import VBump
+from typing import Callable, Dict, List, Tuple
+from VBump.Basic import VBump, _emit_log
 
 def modify_diameter(vbumps:List[VBump], new_D:float):
     for b in vbumps:
@@ -19,6 +19,7 @@ def move_vbumps(
     new_D: int | None = None,
     keep_origin: bool = False,
     group_map: Dict[int, int] | None = None,
+    log_callback: Callable[[str], None] | None = None,
 ):
     ret: list[VBump] = []
     if keep_origin:
@@ -32,7 +33,7 @@ def move_vbumps(
         elif new_group is not None:
             new_b.group = new_group
         ret.append(new_b)
-    print(f"✅ Successfully move {len(selected_vbumps)} vbumps by {delta_u}.")
+    _emit_log(log_callback, f"Successfully moved {len(selected_vbumps)} vbumps by {delta_u}.")
     return ret
 
 if __name__ == "__main__":

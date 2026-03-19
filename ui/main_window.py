@@ -55,11 +55,18 @@ class VBumpUI(QMainWindow):
 
         self.substrate_p0: Tuple[float, float, float] | None = None
         self.substrate_p1: Tuple[float, float, float] | None = None
+        self.is_dark_mode: bool = True
 
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(10, 10, 10, 10)
         self.setCentralWidget(central)
+        
+        top_bar = QHBoxLayout()
+        top_bar.addStretch()
+        self.btn_toggle_theme = QPushButton("☀️ Toggle Theme")
+        top_bar.addWidget(self.btn_toggle_theme)
+        layout.addLayout(top_bar)
 
         # UI Construction (abbreviated for clarity, but includes all elements)
         file_box = QGroupBox("📂 Workspace")
@@ -143,6 +150,7 @@ class VBumpUI(QMainWindow):
         layout.addLayout(bottom_split, stretch=1)
 
         # Signal connections
+        self.btn_toggle_theme.clicked.connect(self.toggle_theme)
         self.btn_load.clicked.connect(self.load_csv)
         self.btn_save.clicked.connect(self.save_csv)
         self.btn_create_pitch.clicked.connect(self.create_pitch)
@@ -158,6 +166,17 @@ class VBumpUI(QMainWindow):
 
         self.log("🐢 Virtual Bump Generator (GUI mode) started.")
         self.log("🔁 Proxy mode is enabled for all operations.")
+
+    def toggle_theme(self):
+        import qdarktheme
+        from PySide6.QtWidgets import QApplication
+        
+        self.is_dark_mode = not self.is_dark_mode
+        theme = "dark" if self.is_dark_mode else "light"
+        QApplication.instance().setStyleSheet(qdarktheme.load_stylesheet(theme))
+        icon = "☀️" if self.is_dark_mode else "🌙"
+        self.btn_toggle_theme.setText(f"{icon} Toggle Theme")
+        self.log(f"🎨 Theme switched to {theme} mode.")
 
     def log(self, text):
         self.log_view.append(text)

@@ -101,7 +101,8 @@ def create_rectangular_area_XY_by_pitch(
         p0:Tuple[float], p1:Tuple[float],
         x_pitch:float, y_pitch:float,
         diameter:float, group:int,
-        z:float, height:float):
+        z:float, height:float,
+        log_callback: Callable[[str], None] | None = None):
 
     ret = []
 
@@ -119,7 +120,7 @@ def create_rectangular_area_XY_by_pitch(
         x += x_pitch
         y = ymin
 
-    print(f"✅ {len(ret)}  vbumps has been created.")
+    _emit_log(log_callback, f"Successfully created {len(ret)} vbumps.")
     return ret
 
 
@@ -127,11 +128,12 @@ def create_rectangular_area_XY_by_number(
         p0:Tuple[float], p1:Tuple[float],
         x_num:int, y_num:int,
         diameter:float, group:int,
-        z:float, height:float):
+        z:float, height:float,
+        log_callback: Callable[[str], None] | None = None):
 
     new_p0, new_p1, x_pitch, y_pitch = normalize_rectangular_area_from_counts(p0, p1, x_num, y_num)
     return create_rectangular_area_XY_by_pitch(
-        new_p0, new_p1, x_pitch, y_pitch, diameter, group, z, height)
+        new_p0, new_p1, x_pitch, y_pitch, diameter, group, z, height, log_callback=log_callback)
 
 
 def create_rectangular_area_XY_by_pitch_to_hdf5(
@@ -185,7 +187,7 @@ def create_rectangular_area_XY_by_pitch_to_hdf5(
             handle.create_dataset("vbump", shape=(0,), maxshape=(None,), dtype=dtype)
         if progress:
             _emit_log(log_callback, "... 0/0 (0.0%)", flush=True)
-        _emit_log(log_callback, f"📦 Successfully streamed 0 vbumps into {filepath} (estimated 0).")
+        _emit_log(log_callback, f"Streamed 0 vbumps into '{filepath}'.")
         return 0
 
     chunk_len = max(1, min(chunk_size, total_estimate or chunk_size))
@@ -279,7 +281,7 @@ def create_rectangular_area_XY_by_pitch_to_hdf5(
         _emit_log(log_callback, f"... {written}/{total_estimate} ({pct:.1f}%)", flush=True)
     _emit_log(
         log_callback,
-        f"📦 Successfully streamed {written} vbumps into {filepath} (estimated {total_estimate}).",
+        f"Streamed {written} vbumps into '{filepath}' (estimated {total_estimate}).",
     )
     return written
 

@@ -148,7 +148,7 @@ class VBumpCollection(list[VBump]):
         self.link_h5_filepath = link_h5_filepath
     
 
-def to_csv(filepath, bumps: List[VBump]):
+def to_csv(filepath, bumps: List[VBump], log_callback: Callable[[str], None] | None = None):
     with open(filepath, "w", encoding="utf-8", newline="") as f:
         f.write("# Virtual Bump Configuration file. Unit:mm\n")
         f.write("# x0, y0, z0, x1, y1, z1, diameter, group\n")
@@ -166,10 +166,10 @@ def to_csv(filepath, bumps: List[VBump]):
                     bump.group,
                 ]
             )
-    print(f"📦 Successfully saved {len(bumps)} vbumps to {filepath}.")
+    _emit_log(log_callback, f"Successfully saved {len(bumps)} vbumps to '{filepath}'.")
 
 
-def load_csv(filepath) -> List[VBump]:
+def load_csv(filepath, log_callback: Callable[[str], None] | None = None) -> List[VBump]:
     ret: List[VBump] = []
     with open(filepath, "r", encoding="utf-8") as f:
         for line in f:
@@ -179,8 +179,8 @@ def load_csv(filepath) -> List[VBump]:
             try:
                 ret.append(VBump.from_line(line))
             except Exception as e:
-                print(f"⚠️ Skipping line due to error: {e}")
-    print(f"📥 Successfully loaded {len(ret)} vbumps from {filepath}.")
+                _emit_log(log_callback, f"Warning: Skipping line due to error: {e}")
+    _emit_log(log_callback, f"Successfully loaded {len(ret)} vbumps from '{filepath}'.")
     return ret
 
 
@@ -224,7 +224,7 @@ def to_hdf5(
             handle.create_dataset('vbump', shape=(0,), maxshape=(None,), dtype=dtype)
         if progress:
             _emit_log(log_callback, '... 0/0 (0.0%)', flush=True)
-        _emit_log(log_callback, f"📦 Successfully saved 0 vbumps to {filepath}.")
+        _emit_log(log_callback, f"Successfully saved 0 vbumps to '{filepath}'.")
         return
 
     chunk_len = max(1, min(chunk_size, total))
@@ -332,7 +332,7 @@ def to_hdf5(
     if progress_interval and written != last_report:
         pct = written / total * 100
         _emit_log(log_callback, f"... {written}/{total} ({pct:.1f}%)", flush=True)
-    _emit_log(log_callback, f"📦 Successfully saved {total} vbumps to {filepath}.")
+    _emit_log(log_callback, f"Successfully saved {total} vbumps to '{filepath}'.")
 
 
 def _normalize_group_id(raw: int | str) -> int:
@@ -363,6 +363,7 @@ def load_hdf5(
     *,
     max_rows: int | None = None,
     only_bounding_boxes: bool | None = None,
+    log_callback: Callable[[str], None] | None = None,
 ) -> VBumpCollection:
     """Load vbumps and bounding boxes from an HDF5 file produced by to_hdf5."""
     h5py = _require_h5py()
@@ -441,7 +442,7 @@ def load_hdf5(
                         int(row['group']),
                     )
                 )
-        print(f"📥 Successfully loaded {len(result)} vbumps from {filepath} (source rows: {total_rows}).")
+        _emit_log(log_callback, f"Successfully loaded {len(result)} vbumps from '{filepath}' (source rows: {total_rows:,}).")
         return result
 
 

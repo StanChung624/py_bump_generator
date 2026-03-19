@@ -1,6 +1,6 @@
 from typing import Callable, List, Dict
 
-from VBump.Basic import VBump, _require_h5py, _require_numpy
+from VBump.Basic import VBump, _require_h5py, _require_numpy, _emit_log
 
 def make_move_func(dx, dy, dz, *,
                    new_group:int|None=None,
@@ -38,7 +38,8 @@ def modify_vbump_hdf5(
     modify_func: Callable[[dict], List[dict]],
     chunk_size: int = 1_000_000,
     dataset_name: str = "vbump",
-    output_name: str | None = None
+    output_name: str | None = None,
+    log_callback: Callable[[str], None] | None = None
 ) -> None:
     """
     Copy vbump dataset, apply modify_func to each row,
@@ -55,7 +56,7 @@ def modify_vbump_hdf5(
         dset_in = fin[dataset_name]
         dtype = dset_in.dtype
         total = dset_in.shape[0]
-        print(f"📈 Source rows: {total:,}")
+        _emit_log(log_callback, f"Source dataset loaded: {total:,} rows.")
 
         target_dataset_name = output_name or dataset_name
 
@@ -67,7 +68,7 @@ def modify_vbump_hdf5(
                             dtype=dtype,
                             chunks=True
                         )
-        print(f"📦 Created '{target_dataset_name}'")
+        _emit_log(log_callback, f"Target dataset '{target_dataset_name}' created successfully.")
 
         # === Step 3. 複製 groups 架構（但稍後會更新 bbox） ===
         if 'groups' in fin:
@@ -136,7 +137,7 @@ def modify_vbump_hdf5(
                 dset_out.resize((new_size,))
                 dset_out[old_size:new_size] = arr_out
 
-            print(f"✅ Chunk {start:,}–{end:,} : {len(arr_out):,} rows (duplicated)")
+            _emit_log(log_callback, f"Processed chunk {start:,}-{end:,}: {len(arr_out):,} rows.")
 
             del arr
             del arr_out
@@ -158,7 +159,7 @@ def modify_vbump_hdf5(
                 (overall_bbox[3], overall_bbox[4], overall_bbox[5]),
             )
 
-        print(f"🎯 Updated {len(group_bbox)} group bounding boxes.")
+        _emit_log(log_callback, f"Updated bounding boxes for {len(group_bbox)} groups.")
 
 def merge_hdf5(
     src_paths: List[str],
@@ -166,7 +167,8 @@ def merge_hdf5(
     *,
     dataset_name: str = "vbump",
     output_name: str | None = None,
-    chunk_size: int = 1_000_000
+    chunk_size: int = 1_000_000,
+    log_callback: Callable[[str], None] | None = None
 ) -> None:
     """
     Merge multiple vbump HDF5 datasets into one file.
@@ -185,13 +187,13 @@ def merge_hdf5(
         for path in src_paths:
             with h5py.File(path, 'r') as fin:
                 if dataset_name not in fin:
-                    print(f"⚠️ Skip '{path}', dataset '{dataset_name}' not found.")
+                    _emit_log(log_callback, f"Warning: Skipping '{path}', dataset '{dataset_name}' not found.")
                     continue
 
                 dset_in = fin[dataset_name]
                 dtype = dset_in.dtype
                 total = dset_in.shape[0]
-                print(f"📂 Merging {path} ({total:,} rows)")
+                _emit_log(log_callback, f"Merging file '{path}' ({total:,} rows)...")
 
                 # 若第一個檔案，建立輸出 dataset
                 if dset_out is None:
@@ -245,7 +247,7 @@ def merge_hdf5(
                     dset_out.resize((new_size,))
                     dset_out[old_size:new_size] = arr
 
-                    print(f"✅ {path} Chunk {start:,}-{end:,}")
+                    _emit_log(log_callback, f"Processed chunk {start:,}-{end:,} for '{path}'.")
 
                 # === Step 3. 合併 groups ===
                 if 'groups' in fin:
@@ -277,6 +279,6 @@ def merge_hdf5(
                     (overall_bbox[3], overall_bbox[4], overall_bbox[5])
                 )
 
-            print(f"🎯 Merged {len(src_paths)} files, {len(group_bbox)} group bboxes updated.")
+            _emit_log(log_callback, f"Successfully merged {len(src_paths)} files and updated {len(group_bbox)} group bounding boxes.")
         else:
-            print("⚠️ No valid datasets merged.")
+            _emit_log(log_callback, "Warning: No valid datasets were merged.")
