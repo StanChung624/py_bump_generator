@@ -1,3 +1,3 @@
 [submodule "external/dxfextractor"]
 	path = external/dxfextractor
-	url = git@github.com:StanChung624/DXFExtractor.git
+	url = https://github.com/StanChung624/DXFExtractor.git

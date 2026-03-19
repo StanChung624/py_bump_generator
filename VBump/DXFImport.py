@@ -18,6 +18,10 @@ class DXFImportReport:
 
 
 def _ensure_dxfextractor_available() -> None:
+    # When running as a PyInstaller frozen exe, dxf_extract is already bundled
+    # into the exe — no sys.path manipulation needed.
+    if getattr(sys, "frozen", False):
+        return
     root_dir = Path(__file__).resolve().parents[1]
     extractor_root = root_dir / "external" / "dxfextractor"
     if extractor_root.exists():
@@ -139,7 +143,7 @@ class DXFVBumpImporter:
             from dxf_extract import extract_geometry
         except Exception as exc:
             raise RuntimeError(
-                "Failed to import dxf_extract. Ensure external/dxfextractor is present and ezdxf is installed."
+                f"Failed to import dxf_extract. Error: {exc}. Ensure external/dxfextractor is present and ezdxf is installed."
             ) from exc
 
         result = extract_geometry(path, log_callback=self.log)
