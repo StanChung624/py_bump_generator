@@ -3,11 +3,16 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from PySide6.QtWidgets import QApplication
+import qdarktheme
+
 from ui.main_window import VBumpUI
 from ui.logic import VBumpLogic
 
 def main():
     app = QApplication(sys.argv)
+    
+    # Apply modern dark theme
+    app.setStyleSheet(qdarktheme.load_stylesheet("dark"))
     
     # Define proxy directory
     proxy_dir = Path(__file__).resolve().parent / ".proxy_runtime"

@@ -67,7 +67,16 @@ class SubstrateDialogResult:
 # Internal helpers
 
 
+def _line_edit(default: str = "") -> QLineEdit:
+    """Helper to create a QLineEdit with an optional default value."""
+    le = QLineEdit()
+    if default:
+        le.setText(default)
+    return le
+
+
 def _pair(parent: QWidget, edits: list[QLineEdit]) -> QWidget:
+    """Helper to group two QLineEdits horizontally."""
     container = QWidget(parent)
     layout = QHBoxLayout(container)
     layout.setContentsMargins(0, 0, 0, 0)
@@ -77,12 +86,26 @@ def _pair(parent: QWidget, edits: list[QLineEdit]) -> QWidget:
 
 
 def _triple(parent: QWidget, edits: list[QLineEdit]) -> QWidget:
+    """Helper to group three QLineEdits horizontally."""
     container = QWidget(parent)
     layout = QHBoxLayout(container)
     layout.setContentsMargins(0, 0, 0, 0)
     for edit in edits:
         layout.addWidget(edit)
     return container
+
+
+def _standard_dialog_buttons(parent_dialog: QDialog, layout: QFormLayout) -> Tuple[QPushButton, QPushButton]:
+    """Helper to append OK and Cancel buttons to a dialog's form layout."""
+    btn_ok = QPushButton("OK")
+    btn_cancel = QPushButton("Cancel")
+    btn_box = QHBoxLayout()
+    btn_box.addWidget(btn_ok)
+    btn_box.addWidget(btn_cancel)
+    layout.addRow(btn_box)
+    
+    btn_cancel.clicked.connect(parent_dialog.reject)
+    return btn_ok, btn_cancel
 
 
 # ---------------------------------------------------------------------------
@@ -94,31 +117,25 @@ def request_pitch_parameters(parent) -> Optional[PitchDialogResult]:
     dlg.setWindowTitle("Create Bumps by Pitch")
     layout = QFormLayout(dlg)
 
-    p0_edits = [QLineEdit(), QLineEdit()]
-    p1_edits = [QLineEdit(), QLineEdit()]
-    x_pitch_edit = QLineEdit()
-    y_pitch_edit = QLineEdit()
-    dia_edit = QLineEdit()
-    group_edit = QLineEdit()
-    z_edit = QLineEdit()
-    h_edit = QLineEdit()
+    p0_edits = [_line_edit("0"), _line_edit("0")]
+    p1_edits = [_line_edit("100"), _line_edit("100")]
+    x_pitch_edit = _line_edit("10")
+    y_pitch_edit = _line_edit("10")
+    dia_edit = _line_edit("10")
+    group_edit = _line_edit("1")
+    z_edit = _line_edit("0")
+    h_edit = _line_edit("5")
 
-    layout.addRow("Lower corner (x0, y0):", _pair(dlg, p0_edits))
-    layout.addRow("Upper corner (x1, y1):", _pair(dlg, p1_edits))
-    layout.addRow("X pitch:", x_pitch_edit)
-    layout.addRow("Y pitch:", y_pitch_edit)
+    layout.addRow("Start Point (X, Y):", _pair(dlg, p0_edits))
+    layout.addRow("End Point (X, Y):", _pair(dlg, p1_edits))
+    layout.addRow("X Pitch:", x_pitch_edit)
+    layout.addRow("Y Pitch:", y_pitch_edit)
     layout.addRow("Diameter:", dia_edit)
     layout.addRow("Group:", group_edit)
     layout.addRow("Base Z:", z_edit)
     layout.addRow("Height:", h_edit)
 
-    btn_ok = QPushButton("OK")
-    btn_cancel = QPushButton("Cancel")
-    btn_box = QHBoxLayout()
-    btn_box.addWidget(btn_ok)
-    btn_box.addWidget(btn_cancel)
-    layout.addRow(btn_box)
-
+    btn_ok, _btn_cancel = _standard_dialog_buttons(dlg, layout)
     result: Optional[PitchDialogResult] = None
 
     def on_ok():
@@ -133,14 +150,13 @@ def request_pitch_parameters(parent) -> Optional[PitchDialogResult]:
             z = float(z_edit.text())
             h = float(h_edit.text())
         except ValueError:
-            QMessageBox.warning(parent, "Warning", "Invalid input values.")
+            QMessageBox.warning(parent, "Warning", "Invalid input values. Please ensure all required fields are numbers.")
             return
 
         result = PitchDialogResult(p0, p1, x_pitch, y_pitch, dia, group, z, h)
         dlg.accept()
 
     btn_ok.clicked.connect(on_ok)
-    btn_cancel.clicked.connect(dlg.reject)
 
     if dlg.exec() == QDialog.Accepted:
         return result
@@ -152,31 +168,25 @@ def request_count_parameters(parent) -> Optional[CountDialogResult]:
     dlg.setWindowTitle("Create Bumps by Count")
     layout = QFormLayout(dlg)
 
-    p0_edits = [QLineEdit(), QLineEdit()]
-    p1_edits = [QLineEdit(), QLineEdit()]
-    x_count_edit = QLineEdit()
-    y_count_edit = QLineEdit()
-    dia_edit = QLineEdit()
-    group_edit = QLineEdit()
-    z_edit = QLineEdit()
-    h_edit = QLineEdit()
+    p0_edits = [_line_edit("0"), _line_edit("0")]
+    p1_edits = [_line_edit("100"), _line_edit("100")]
+    x_count_edit = _line_edit("11")
+    y_count_edit = _line_edit("11")
+    dia_edit = _line_edit("10")
+    group_edit = _line_edit("1")
+    z_edit = _line_edit("0")
+    h_edit = _line_edit("5")
 
-    layout.addRow("Lower corner (x0, y0):", _pair(dlg, p0_edits))
-    layout.addRow("Upper corner (x1, y1):", _pair(dlg, p1_edits))
-    layout.addRow("X count:", x_count_edit)
-    layout.addRow("Y count:", y_count_edit)
+    layout.addRow("Start Point (X, Y):", _pair(dlg, p0_edits))
+    layout.addRow("End Point (X, Y):", _pair(dlg, p1_edits))
+    layout.addRow("X Count:", x_count_edit)
+    layout.addRow("Y Count:", y_count_edit)
     layout.addRow("Diameter:", dia_edit)
     layout.addRow("Group:", group_edit)
     layout.addRow("Base Z:", z_edit)
     layout.addRow("Height:", h_edit)
 
-    btn_ok = QPushButton("OK")
-    btn_cancel = QPushButton("Cancel")
-    btn_box = QHBoxLayout()
-    btn_box.addWidget(btn_ok)
-    btn_box.addWidget(btn_cancel)
-    layout.addRow(btn_box)
-
+    btn_ok, _btn_cancel = _standard_dialog_buttons(dlg, layout)
     result: Optional[CountDialogResult] = None
 
     def on_ok():
@@ -191,14 +201,13 @@ def request_count_parameters(parent) -> Optional[CountDialogResult]:
             z = float(z_edit.text())
             h = float(h_edit.text())
         except ValueError:
-            QMessageBox.warning(parent, "Warning", "Invalid input values.")
+            QMessageBox.warning(parent, "Warning", "Invalid input values. Please ensure counts are integers and other fields are numbers.")
             return
 
         result = CountDialogResult(p0, p1, x_count, y_count, dia, group, z, h)
         dlg.accept()
 
     btn_ok.clicked.connect(on_ok)
-    btn_cancel.clicked.connect(dlg.reject)
 
     if dlg.exec() == QDialog.Accepted:
         return result
@@ -210,18 +219,13 @@ def request_modify_value(parent, title: str, value_label: str) -> Optional[Modif
     dlg.setWindowTitle(title)
     layout = QFormLayout(dlg)
 
-    group_edit = QLineEdit()
-    new_value_edit = QLineEdit()
-    layout.addRow("Group Filter (optional):", group_edit)
+    group_edit = _line_edit("")
+    new_value_edit = _line_edit("10")
+    
+    layout.addRow("Group Filter (Optional):", group_edit)
     layout.addRow(value_label, new_value_edit)
 
-    btn_ok = QPushButton("OK")
-    btn_cancel = QPushButton("Cancel")
-    btn_box = QHBoxLayout()
-    btn_box.addWidget(btn_ok)
-    btn_box.addWidget(btn_cancel)
-    layout.addRow(btn_box)
-
+    btn_ok, _btn_cancel = _standard_dialog_buttons(dlg, layout)
     result: Optional[ModifyDialogResult] = None
 
     def on_ok():
@@ -237,7 +241,6 @@ def request_modify_value(parent, title: str, value_label: str) -> Optional[Modif
         dlg.accept()
 
     btn_ok.clicked.connect(on_ok)
-    btn_cancel.clicked.connect(dlg.reject)
 
     if dlg.exec() == QDialog.Accepted:
         return result
@@ -246,30 +249,24 @@ def request_modify_value(parent, title: str, value_label: str) -> Optional[Modif
 
 def request_move_parameters(parent) -> Optional[MoveDialogResult]:
     dlg = QDialog(parent)
-    dlg.setWindowTitle("Move / Copy Bumps")
+    dlg.setWindowTitle("Move / Duplicate Bumps")
     layout = QFormLayout(dlg)
 
-    group_edit = QLineEdit()
-    ref_xyz = [QLineEdit(), QLineEdit(), QLineEdit()]
-    new_xyz = [QLineEdit(), QLineEdit(), QLineEdit()]
-    keep_check = QCheckBox("Keep Original (Copy)")
-    new_group_edit = QLineEdit()
-    new_diam_edit = QLineEdit()
+    group_edit = _line_edit("")
+    ref_xyz = [_line_edit("0"), _line_edit("0"), _line_edit("0")]
+    new_xyz = [_line_edit("10"), _line_edit("0"), _line_edit("0")]
+    keep_check = QCheckBox("Keep Original (Duplicate)")
+    new_group_edit = _line_edit("")
+    new_diam_edit = _line_edit("")
 
-    layout.addRow("Group Filter (optional):", group_edit)
-    layout.addRow("Reference Point (x,y,z):", _triple(dlg, ref_xyz))
-    layout.addRow("Target Point (x,y,z):", _triple(dlg, new_xyz))
+    layout.addRow("Group Filter (Optional):", group_edit)
+    layout.addRow("Reference Point (X, Y, Z):", _triple(dlg, ref_xyz))
+    layout.addRow("Target Point (X, Y, Z):", _triple(dlg, new_xyz))
     layout.addRow(keep_check)
-    layout.addRow("New Group (copy):", new_group_edit)
-    layout.addRow("New Diameter (copy):", new_diam_edit)
+    layout.addRow("New Group (Duplicate):", new_group_edit)
+    layout.addRow("New Diameter (Duplicate):", new_diam_edit)
 
-    btn_ok = QPushButton("OK")
-    btn_cancel = QPushButton("Cancel")
-    btn_box = QHBoxLayout()
-    btn_box.addWidget(btn_ok)
-    btn_box.addWidget(btn_cancel)
-    layout.addRow(btn_box)
-
+    btn_ok, _btn_cancel = _standard_dialog_buttons(dlg, layout)
     result: Optional[MoveDialogResult] = None
 
     def on_ok():
@@ -297,7 +294,6 @@ def request_move_parameters(parent) -> Optional[MoveDialogResult]:
         dlg.accept()
 
     btn_ok.clicked.connect(on_ok)
-    btn_cancel.clicked.connect(dlg.reject)
 
     if dlg.exec() == QDialog.Accepted:
         return result
@@ -314,10 +310,10 @@ def request_substrate_box(
     dlg.setWindowTitle("Set Substrate Box Coordinates")
     layout = QFormLayout(dlg)
 
-    p0_edits = [QLineEdit(), QLineEdit(), QLineEdit()]
-    p1_edits = [QLineEdit(), QLineEdit(), QLineEdit()]
-    layout.addRow("Lower corner (x0, y0, z0):", _triple(dlg, p0_edits))
-    layout.addRow("Upper corner (x1, y1, z1):", _triple(dlg, p1_edits))
+    p0_edits = [_line_edit(""), _line_edit(""), _line_edit("")]
+    p1_edits = [_line_edit(""), _line_edit(""), _line_edit("")]
+    layout.addRow("Start Point (X, Y, Z):", _triple(dlg, p0_edits))
+    layout.addRow("End Point (X, Y, Z):", _triple(dlg, p1_edits))
 
     def _populate_fields(values: tuple[tuple[float, float, float], tuple[float, float, float]]) -> None:
         (min_corner, max_corner) = values
@@ -331,8 +327,9 @@ def request_substrate_box(
 
     btn_ok = QPushButton("OK")
     btn_cancel = QPushButton("Cancel")
-    btn_auto = QPushButton("Auto")
+    btn_auto = QPushButton("Auto Compute")
     btn_auto.setEnabled(auto_bounds is not None)
+    
     btn_box = QHBoxLayout()
     btn_box.addWidget(btn_auto)
     btn_box.addWidget(btn_ok)
