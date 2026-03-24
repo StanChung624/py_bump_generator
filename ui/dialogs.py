@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -14,6 +15,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QWidget,
+    QListWidget,
+    QListWidgetItem,
+    QVBoxLayout,
 )
 
 
@@ -61,6 +65,15 @@ class MoveDialogResult:
 class SubstrateDialogResult:
     p0: Tuple[float, float, float]
     p1: Tuple[float, float, float]
+
+
+@dataclass
+class DXFImportDialogResult:
+    group: int
+    height: float
+    base_z: float
+    unit_scale: float
+    selected_layers: List[str]
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +372,110 @@ def request_substrate_box(
         _populate_fields(auto_bounds)
 
     btn_auto.clicked.connect(on_auto)
+    btn_ok.clicked.connect(on_ok)
+    btn_cancel.clicked.connect(dlg.reject)
+
+    if dlg.exec() == QDialog.Accepted:
+        return result
+    return None
+
+
+def request_dxf_import_parameters(parent, layers: dict[str, int]) -> Optional[DXFImportDialogResult]:
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("DXF Import Parameters")
+    main_layout = QVBoxLayout(dlg)
+    form_layout = QFormLayout()
+
+    group_edit = _line_edit("1")
+    height_edit = _line_edit("10.0")
+    base_z_edit = _line_edit("0.0")
+    unit_scale_edit = _line_edit("0.001")
+
+    form_layout.addRow("Group ID:", group_edit)
+    form_layout.addRow("Height:", height_edit)
+    form_layout.addRow("Base Z:", base_z_edit)
+    form_layout.addRow("Unit scale:", unit_scale_edit)
+    main_layout.addLayout(form_layout)
+
+    main_layout.addWidget(QWidget()) # spacer
+    main_layout.addWidget(QPushButton("Select Layers to Import:"))
+    
+    list_widget = QListWidget()
+    # Sort layers by name for better UX
+    for layer_name in sorted(layers.keys()):
+        count = layers[layer_name]
+        display_text = f"{layer_name} (counts: {count})"
+        item = QListWidgetItem(display_text)
+        item.setData(Qt.UserRole, layer_name) # Store original name
+        item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+        item.setCheckState(Qt.Checked)
+        list_widget.addItem(item)
+    main_layout.addWidget(list_widget)
+
+    # Helper buttons for list
+    list_buttons = QHBoxLayout()
+    btn_all = QPushButton("Select All")
+    btn_none = QPushButton("Deselect All")
+    list_buttons.addWidget(btn_all)
+    list_buttons.addWidget(btn_none)
+    main_layout.addLayout(list_buttons)
+
+    def select_all():
+        for i in range(list_widget.count()):
+            list_widget.item(i).setCheckState(Qt.Checked)
+
+    def select_none():
+        for i in range(list_widget.count()):
+            list_widget.item(i).setCheckState(Qt.Unchecked)
+
+    btn_all.clicked.connect(select_all)
+    btn_none.clicked.connect(select_none)
+
+    btn_ok = QPushButton("OK")
+    btn_cancel = QPushButton("Cancel")
+    btn_box = QHBoxLayout()
+    btn_box.addWidget(btn_ok)
+    btn_box.addWidget(btn_cancel)
+    main_layout.addLayout(btn_box)
+
+    result: Optional[DXFImportDialogResult] = None
+
+    def on_ok():
+        nonlocal result
+        selected_layers = []
+        for i in range(list_widget.count()):
+            item = list_widget.item(i)
+            if item.checkState() == Qt.Checked:
+                selected_layers.append(item.data(Qt.UserRole))
+        
+        if not selected_layers:
+            QMessageBox.warning(dlg, "Warning", "Please select at least one layer.")
+            return
+
+        try:
+            group = int(group_edit.text())
+            height = float(height_edit.text())
+            base_z = float(base_z_edit.text())
+            unit_scale = float(unit_scale_edit.text())
+        except ValueError:
+            QMessageBox.warning(dlg, "Warning", "Invalid input values. Please ensure all fields are numbers.")
+            return
+
+        result = DXFImportDialogResult(group, height, base_z, unit_scale, selected_layers)
+        dlg.accept()
+
+        try:
+            group = int(group_edit.text())
+            height = float(height_edit.text())
+            base_z = float(base_z_edit.text())
+            unit_scale = float(unit_scale_edit.text())
+        except ValueError:
+            QMessageBox.warning(dlg, "Warning", "Invalid input values. Please ensure all fields are numbers.")
+            return
+
+        result = DXFImportDialogResult(group, height, base_z, unit_scale, selected_layers)
+        dlg.accept()
+
     btn_ok.clicked.connect(on_ok)
     btn_cancel.clicked.connect(dlg.reject)
 

@@ -41,10 +41,12 @@ from ui.dialogs import (
     request_move_parameters,
     request_pitch_parameters,
     request_substrate_box,
+    request_dxf_import_parameters,
 )
 from ui.logic import VBumpLogic
 
-PLOT_MATERIALIZE_THRESHOLD = 1_000_000
+PLOT_MATERIALIZE_FOR_DETAILS = 10_000
+PLOT_MATERIALIZE_LIMIT = 1_000_000
 
 class VBumpUI(QMainWindow):
     def __init__(self, logic: VBumpLogic):
@@ -201,17 +203,19 @@ class VBumpUI(QMainWindow):
 
         try:
             if path.lower().endswith(".dxf"):
-                from PySide6.QtWidgets import QInputDialog
-                group, ok = QInputDialog.getInt(self, "DXF Import", "Group ID:", 1, 1, 9999)
-                if not ok: return
-                height, ok = QInputDialog.getDouble(self, "DXF Import", "Height:", 10.0, -1e9, 1e9, 6)
-                if not ok: return
-                base_z, ok = QInputDialog.getDouble(self, "DXF Import", "Base Z:", 0.0, -1e9, 1e9, 6)
-                if not ok: return
-                unit_scale, ok = QInputDialog.getDouble(self, "DXF Import", "Unit scale:", 0.001, 1e-12, 1e12, 9)
-                if not ok: return
-                incoming_proxy = self.logic.build_proxy_from_dxf(path, group, height, base_z, unit_scale)
-                self.log("✅ Loading DXF format and converting to proxy hdf5")
+                layers = self.logic.get_dxf_layers(path)
+                dxf_params = request_dxf_import_parameters(self, layers)
+                if not dxf_params:
+                    return
+                incoming_proxy = self.logic.build_proxy_from_dxf(
+                    path,
+                    dxf_params.group,
+                    dxf_params.height,
+                    dxf_params.base_z,
+                    dxf_params.unit_scale,
+                    selected_layers=dxf_params.selected_layers
+                )
+                self.log(f"✅ Loading DXF layers {', '.join(dxf_params.selected_layers)} and converting to proxy hdf5")
             elif h5py.is_hdf5(path):
                 incoming_proxy = self.logic.copy_hdf5_to_proxy(path)
                 self.log("✅ Loading hdf5 format (proxy copy)")
@@ -219,23 +223,29 @@ class VBumpUI(QMainWindow):
                 incoming_proxy = self.logic.build_proxy_from_csv(path)
                 self.log("✅ Loading csv format and converting to proxy hdf5")
 
-            reply = QMessageBox.question(
-                self, "Reassign Group ID",
-                "Do you want to assign a new group ID to the newly loaded bumps?",
-                QMessageBox.Yes | QMessageBox.No,
-            )
-            if reply == QMessageBox.Yes:
-                from PySide6.QtWidgets import QInputDialog
-                new_gid, ok = QInputDialog.getInt(self, "New Group ID", "Enter new group ID:", 1, 1, 9999)
-                if ok:
-                    incoming_proxy = self.logic.copy_proxy_with_single_group(incoming_proxy, new_gid)
-                    self.log(f"🔢 Newly loaded bumps reassigned to group {new_gid}.")
+            if path.lower().endswith(".dxf"):
+                # DXF already prompts for group ID in its specific parameter dialog
+                pass
+            else:
+                reply = QMessageBox.question(
+                    self, "Reassign Group ID",
+                    "Do you want to assign a new group ID to the newly loaded bumps?",
+                    QMessageBox.Yes | QMessageBox.No,
+                )
+                if reply == QMessageBox.Yes:
+                    from PySide6.QtWidgets import QInputDialog
+                    new_gid, ok = QInputDialog.getInt(self, "New Group ID", "Enter new group ID:", 1, 1, 9999)
+                    if ok:
+                        incoming_proxy = self.logic.copy_proxy_with_single_group(incoming_proxy, new_gid)
+                        self.log(f"🔢 Newly loaded bumps reassigned to group {new_gid}.")
 
             if self.logic.proxy_h5_path:
                 merged = self.logic.merge_proxy_paths([self.logic.proxy_h5_path, incoming_proxy])
-                self.logic.replace_proxy(merged, f"✅ Loaded and appended {path} (total {self.logic.current_source_count():,} bumps)")
+                self.logic.replace_proxy(merged, "")
+                self.log(f"✅ Loaded and appended {path} (total {self.logic.current_source_count():,} bumps)")
             else:
-                self.logic.replace_proxy(incoming_proxy, f"✅ Loaded {path} ({self.logic.current_source_count():,} bumps)")
+                self.logic.replace_proxy(incoming_proxy, "")
+                self.log(f"✅ Loaded {path} ({self.logic.current_source_count():,} bumps)")
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
@@ -425,14 +435,25 @@ class VBumpUI(QMainWindow):
         self.figure.clear()
         ax = self.figure.add_subplot(111, projection="3d")
         source_count = self.logic.current_source_count()
-        if source_count <= PLOT_MATERIALIZE_THRESHOLD:
+        
+        is_proxy = getattr(self.logic.current_vbumps, "is_bounding_box_only", False)
+        
+        if source_count <= PLOT_MATERIALIZE_FOR_DETAILS:
             vbumps = self.logic.materialize_current()
-            if len(vbumps) < 9000: plot_vbumps(vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
-            else: plot_vbumps_aabb(vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
-            self.log(f"📊 Plot rendered with materialized data ({len(vbumps):,} rows).")
+            plot_vbumps(vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
+            self.log(f"📊 Plot rendered with detailed materialized data ({len(vbumps):,} rows).")
+        elif is_proxy:
+            # We already have markers, use them for AABB plotting without materializing full data
+            plot_vbumps_aabb(self.logic.current_vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
+            self.log(f"📊 Plot rendered from proxy markers (source {source_count:,} rows).")
+        elif source_count <= PLOT_MATERIALIZE_LIMIT:
+            vbumps = self.logic.materialize_current()
+            plot_vbumps_aabb(vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
+            self.log(f"📊 Plot rendered with AABB materialized data ({len(vbumps):,} rows).")
         else:
             plot_vbumps_aabb(self.logic.current_vbumps, self.substrate_p0, self.substrate_p1, ax=ax)
-            self.log(f"📊 Plot rendered from proxy markers (source {source_count:,} rows > {PLOT_MATERIALIZE_THRESHOLD:,}).")
+            self.log(f"📊 Plot rendered from existing markers (source {source_count:,} rows).")
+            
         self.canvas.draw()
 
     def set_substrate_box(self):

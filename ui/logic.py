@@ -23,13 +23,14 @@ class VBumpLogic:
         self.proxy_h5_path: str | None = None
         self.current_vbumps: VBumpCollection = VBumpCollection()
         self.loaded_vbumps: VBumpCollection = VBumpCollection()
+        self._dxf_importer = DXFVBumpImporter(log_callback=self.log)
 
     def next_proxy_path(self, stem: str) -> str:
         return str((self.proxy_dir / f"{stem}_{uuid.uuid4().hex}.h5").resolve())
 
     def set_active_proxy(self, path: str) -> None:
         self.proxy_h5_path = path
-        proxy_markers = load_hdf5(path, only_bounding_boxes=True)
+        proxy_markers = load_hdf5(path, only_bounding_boxes=True, log_callback=self.log)
         self.current_vbumps = proxy_markers
         self.loaded_vbumps = VBumpCollection(proxy_markers)
 
@@ -39,9 +40,13 @@ class VBumpLogic:
         to_hdf5(target, vbumps, log_callback=self.log)
         return target
 
-    def build_proxy_from_dxf(self, dxf_path: str, group: int, height: float, base_z: float, unit_scale: float) -> str:
-        importer = DXFVBumpImporter(unit_scale=unit_scale, base_z=base_z, log_callback=self.log)
-        vbumps, report = importer.import_file(dxf_path, group=group, height=height)
+    def get_dxf_layers(self, dxf_path: str) -> dict[str, int]:
+        return self._dxf_importer.get_layer_counts(dxf_path)
+
+    def build_proxy_from_dxf(self, dxf_path: str, group: int, height: float, base_z: float, unit_scale: float, selected_layers: list[str] | None = None) -> str:
+        self._dxf_importer.unit_scale = unit_scale
+        self._dxf_importer.base_z = base_z
+        vbumps, report = self._dxf_importer.import_file(dxf_path, group=group, height=height, selected_layers=selected_layers)
         self.log(
             f"✅ DXF parsed: {len(vbumps):,} bumps "
             f"(geometry={report.used_geometry}, diagnostics={report.diagnostics_count})"

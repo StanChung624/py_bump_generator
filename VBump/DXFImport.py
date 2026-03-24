@@ -131,13 +131,13 @@ class DXFVBumpImporter:
         self.max_rms = max_rms
         self.prefer_circles = prefer_circles
         self.log = log_callback
+        self._cached_result = None
+        self._cached_path = None
 
-    def import_file(self, path: str, *, group: int = 1, height: float = 10.0) -> tuple[List[VBump], DXFImportReport]:
-        if height == 0.0:
-            raise ValueError("height must not be zero.")
-        if self.unit_scale == 0.0:
-            raise ValueError("unit_scale must not be zero.")
-
+    def _get_extraction_result(self, path: str):
+        if self._cached_path == path and self._cached_result is not None:
+            return self._cached_result
+        
         _ensure_dxfextractor_available()
         try:
             from dxf_extract import extract_geometry
@@ -147,8 +147,43 @@ class DXFVBumpImporter:
             ) from exc
 
         result = extract_geometry(path, log_callback=self.log)
+        self._cached_path = path
+        self._cached_result = result
+        return result
+
+    def get_layer_counts(self, path: str) -> dict[str, int]:
+        result = self._get_extraction_result(path)
+        counts = {}
+        
+        # We also want to include all layers from the document even if they have 0 geometry
+        import ezdxf
+        doc = ezdxf.readfile(path)
+        for layer in doc.layers:
+            counts[layer.dxf.name] = 0
+
+        for c in result.circles:
+            layer = c.source.layer if c.source else "0"
+            counts[layer] = counts.get(layer, 0) + 1
+            
+        for p in result.closed_polylines:
+            layer = p.source.layer if p.source else "0"
+            counts[layer] = counts.get(layer, 0) + 1
+            
+        return counts
+
+    def import_file(self, path: str, *, group: int = 1, height: float = 10.0, selected_layers: list[str] | None = None) -> tuple[List[VBump], DXFImportReport]:
+        if height == 0.0:
+            raise ValueError("height must not be zero.")
+        if self.unit_scale == 0.0:
+            raise ValueError("unit_scale must not be zero.")
+
+        result = self._get_extraction_result(path)
         circles_to_use = result.circles
         polylines_to_use = result.closed_polylines
+
+        if selected_layers is not None:
+            circles_to_use = [c for c in circles_to_use if c.source and c.source.layer in selected_layers]
+            polylines_to_use = [p for p in polylines_to_use if p.source and p.source.layer in selected_layers]
 
         if self.prefer_circles and circles_to_use:
             polylines_to_use = []
